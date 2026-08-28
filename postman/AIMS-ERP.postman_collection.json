@@ -1,0 +1,1978 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-0001-4a00-9000-aims-erp-m1",
+    "name": "AIMS ERP",
+    "description": "AIMS ERP backend — Milestone 1: Tenant Infrastructure.\n\nThe folders follow the bounded contexts of the approved architecture. Run the collection top to bottom: the Tenant Management requests store ids and codes into collection variables that later folders depend on.\n\nTenant resolution in this milestone uses the `x-tenant` header carrying the college's AISHE/NAAC code. That is UNAUTHENTICATED and is replaced by the authenticated strategy when auth lands — see the README.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "tenant_a_code",
+      "value": "C-41207",
+      "type": "string"
+    },
+    {
+      "key": "tenant_b_code",
+      "value": "C-55891",
+      "type": "string"
+    },
+    {
+      "key": "tenant_a_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tenant_b_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "dept_a_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "dept_b_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "run_stamp",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "dept_b_only_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Mint a fresh pair of college codes at the start of every run, so the",
+          "// collection can be re-run against the same database without colliding",
+          "// on the unique tenant code. 'Health' is the first request in the",
+          "// collection and therefore marks the start of a run.",
+          "if (pm.info.requestName === 'Health' || !pm.collectionVariables.get('run_stamp')) {",
+          "  const stamp = String(Date.now()).slice(-7);",
+          "  const set = (k, v) => { pm.collectionVariables.set(k, v); pm.environment.set(k, v); };",
+          "  set('run_stamp', stamp);",
+          "  set('tenant_a_code', 'C-A' + stamp);",
+          "  set('tenant_b_code', 'C-B' + stamp);",
+          "  set('tenant_a_id', '');",
+          "  set('tenant_b_id', '');",
+          "}",
+          "",
+          "// Authentication is not implemented in Milestone 1. The bearer token is",
+          "// wired up so the collection needs no restructuring once auth lands."
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Platform",
+      "description": "Platform-wide endpoints. These operate on the public schema and resolve no tenant.",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Liveness, plus the current tenant-migration version and any tenants lagging behind it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test('reports ok', () => pm.expect(d.status).to.eql('ok'));",
+                  "pm.test('exposes the tenant migration line', () => pm.expect(d).to.have.property('latest_tenant_migration'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Academic Patterns",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/academic-patterns",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "academic-patterns"
+              ]
+            },
+            "description": "Delivery patterns. Platform-wide reference data held in the public schema, not copied per tenant (architecture contradiction C-11)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const codes = pm.response.json().data.map(p => p.code);",
+                  "pm.test('seeds SEMESTER, TRIMESTER, ANNUAL', () => {",
+                  "  pm.expect(codes).to.include.members(['SEMESTER', 'TRIMESTER', 'ANNUAL']);",
+                  "});",
+                  "const sem = pm.response.json().data.find(p => p.code === 'SEMESTER');",
+                  "pm.test('SEMESTER is 2 terms per year', () => pm.expect(sem.terms_per_year).to.eql(2));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tenant Management",
+      "description": "Provisioning and lifecycle for colleges. Not tenant-scoped: provisioning a college cannot require that college to already be resolvable.",
+      "item": [
+        {
+          "name": "Create Tenant A — Engineering / Autonomous",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{tenant_a_code}}\",\n  \"name\": \"ABC Institute of Technology\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            },
+            "description": "Registers the college, creates its PostgreSQL schema, runs every tenant migration and marks it ACTIVE. Returns 201 only when all of that succeeded."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('tenant_a_id', d.id);",
+                  "pm.environment.set('tenant_a_id', d.id);",
+                  "pm.test('is ACTIVE, not merely registered', () => pm.expect(d.status).to.eql('ACTIVE'));",
+                  "pm.test('schema name derived from the code', () => { const expected = 'tenant_' + pm.collectionVariables.get('tenant_a_code').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); pm.expect(d.schema_name).to.eql(expected); });",
+                  "pm.test('Location header points at the tenant', () => {",
+                  "  pm.expect(pm.response.headers.get('location')).to.eql('/api/v1/tenants/' + d.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Tenant B — Arts & Science / Affiliated",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{tenant_b_code}}\",\n  \"name\": \"St Xavier College of Arts and Science\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\",\n  \"affiliating_university\": \"University of Madras\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            },
+            "description": "An affiliated college must name its parent university — invariant I-10."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('tenant_b_id', d.id);",
+                  "pm.environment.set('tenant_b_id', d.id);",
+                  "pm.test('is ACTIVE', () => pm.expect(d.status).to.eql('ACTIVE'));",
+                  "pm.test('records the affiliating university', () => {",
+                  "  pm.expect(d.affiliating_university).to.eql('University of Madras');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Tenants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const codes = pm.response.json().data.map(t => t.code);",
+                  "pm.test('includes both provisioned colleges', () => {",
+                  "  pm.expect(codes).to.include(pm.collectionVariables.get('tenant_a_code'));",
+                  "  pm.expect(codes).to.include(pm.collectionVariables.get('tenant_b_code'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Tenants — filtered by status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants?status=ACTIVE",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "ACTIVE"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('every row is ACTIVE', () => {",
+                  "  pm.response.json().data.forEach(t => pm.expect(t.status).to.eql('ACTIVE'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Tenant",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('is the college we asked for', () => {",
+                  "  pm.expect(pm.response.json().data.code).to.eql(pm.collectionVariables.get('tenant_a_code'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Tenant — rename",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ABC Institute of Technology (Autonomous)\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}"
+              ]
+            },
+            "description": "Only name and affiliating_university are editable. code, schema_name, institution_type and autonomy_status are not — the last two are invariant I-40, because changing them would invalidate every frozen report assessed on the old mark scale."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('renamed', () => {",
+                  "  pm.expect(pm.response.json().data.name).to.eql('ABC Institute of Technology (Autonomous)');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Tenant — immutable fields are ignored",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ABC Institute of Technology (Autonomous)\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\",\n  \"code\": \"C-HIJACK\",\n  \"schema_name\": \"public\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}"
+              ]
+            },
+            "description": "Mass-assignment guard. The immutable fields are silently dropped rather than applied."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test('institution_type unchanged', () => pm.expect(d.institution_type).to.eql('ENGINEERING'));",
+                  "pm.test('autonomy_status unchanged', () => pm.expect(d.autonomy_status).to.eql('AUTONOMOUS'));",
+                  "pm.test('code unchanged', () => pm.expect(d.code).to.eql(pm.collectionVariables.get('tenant_a_code')));",
+                  "pm.test('schema_name unchanged', () => { const expected = 'tenant_' + pm.collectionVariables.get('tenant_a_code').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); pm.expect(d.schema_name).to.eql(expected); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tenant Schema Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}/schema",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}",
+                "schema"
+              ]
+            },
+            "description": "Whether the tenant's PostgreSQL schema exists, which tenant migrations it carries, and which are pending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test('schema exists', () => pm.expect(d.schema_exists).to.be.true);",
+                  "pm.test('no pending migrations', () => pm.expect(d.pending_versions).to.eql([]));",
+                  "pm.test('reported up to date', () => pm.expect(d.up_to_date).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Migrate One Tenant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}/migrations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}",
+                "migrations"
+              ]
+            },
+            "description": "Applies pending tenant migrations to one college. Safe to repeat: an up-to-date tenant is a no-op."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('up to date afterwards', () => pm.expect(pm.response.json().data.up_to_date).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Migrate All Tenants",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/migrations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "migrations"
+              ]
+            },
+            "description": "Rolls pending tenant migrations out to every serving college, one at a time. A failure on one does not strand the rest; the response names exactly which failed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test('nothing failed', () => pm.expect(d.failed_count).to.eql(0));",
+                  "pm.test('both colleges reported', () => {",
+                  "  pm.expect(d.migrated).to.include(pm.collectionVariables.get('tenant_a_code'));",
+                  "  pm.expect(d.migrated).to.include(pm.collectionVariables.get('tenant_b_code'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Suspend Tenant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_b_id}}/suspend",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_b_id}}",
+                "suspend"
+              ]
+            },
+            "description": "A suspended college keeps all its data and simply stops serving requests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('now SUSPENDED', () => pm.expect(pm.response.json().data.status).to.eql('SUSPENDED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activate Tenant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_b_id}}/activate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_b_id}}",
+                "activate"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('back to ACTIVE', () => pm.expect(pm.response.json().data.status).to.eql('ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tenant Context",
+      "description": "Proves tenant resolution and shows the configuration the two flags resolve to.",
+      "item": [
+        {
+          "name": "Resolve Tenant A — 150-mark engineering profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenant",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant"
+              ]
+            },
+            "description": "Engineering + Autonomous resolves to a 150-mark scale with OBE and BoS revision enabled."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test('resolved the right college', () => pm.expect(d.code).to.eql(pm.collectionVariables.get('tenant_a_code')));",
+                  "pm.test('assessed out of 150', () => pm.expect(d.profile.criteria_scale).to.eql(150));",
+                  "pm.test('OBE enabled', () => pm.expect(d.profile.features.obe_mapping).to.be.true);",
+                  "pm.test('BoS revision enabled', () => pm.expect(d.profile.features.bos_curriculum_revision).to.be.true);",
+                  "pm.test('faculty BoS participation off', () => pm.expect(d.profile.features.faculty_bos_participation).to.be.false);",
+                  "pm.test('experiential variant is industry', () => pm.expect(d.profile.experiential_variant).to.eql('industry'));",
+                  "pm.test('echoes the resolved tenant header', () => {",
+                  "  pm.expect(pm.response.headers.get('x-resolved-tenant')).to.eql(pm.collectionVariables.get('tenant_a_code'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resolve Tenant B — 100-mark arts & science profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenant",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant"
+              ]
+            },
+            "description": "Arts & Science + Affiliated resolves to a 100-mark scale, OBE off, faculty BoS participation on instead of BoS revision."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test('assessed out of 100', () => pm.expect(d.profile.criteria_scale).to.eql(100));",
+                  "pm.test('OBE disabled', () => pm.expect(d.profile.features.obe_mapping).to.be.false);",
+                  "pm.test('BoS revision disabled', () => pm.expect(d.profile.features.bos_curriculum_revision).to.be.false);",
+                  "pm.test('faculty BoS participation on', () => pm.expect(d.profile.features.faculty_bos_participation).to.be.true);",
+                  "pm.test('experiential variant is field', () => pm.expect(d.profile.experiential_variant).to.eql('field'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Academic Structure",
+      "description": "Tenant-scoped. Every request carries x-tenant and operates inside that college's PostgreSQL schema.",
+      "item": [
+        {
+          "name": "Create Department in Tenant A",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"CSE\",\n  \"name\": \"Department of Computer Science and Engineering\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "pm.collectionVariables.set('dept_a_id', d.id);",
+                  "pm.environment.set('dept_a_id', d.id);",
+                  "pm.test('code upcased', () => pm.expect(d.code).to.eql('CSE'));",
+                  "pm.test('active by default', () => pm.expect(d.is_active).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Department in Tenant B — same code, different college",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"CSE\",\n  \"name\": \"Department of Computer Science (B)\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            },
+            "description": "The same department code is free in a different college, because uniqueness is per schema. In a shared-table design this would collide."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created — code is not globally unique', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('dept_b_id', pm.response.json().data.id);",
+                  "pm.environment.set('dept_b_id', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Second Department in Tenant B",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"ENG\",\n  \"name\": \"Department of English Literature\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            },
+            "description": "Gives tenant B an id that does not exist in tenant A, so the isolation checks below can distinguish 'not found' from 'found my own row'."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('dept_b_only_id', pm.response.json().data.id);",
+                  "pm.environment.set('dept_b_only_id', pm.response.json().data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Departments — Tenant A",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const codes = pm.response.json().data.map(d => d.code);",
+                  "pm.test('sees only its own department', () => pm.expect(codes).to.eql(['CSE']));",
+                  "pm.test('does not see tenant B ENG', () => pm.expect(codes).to.not.include('ENG'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Departments — Tenant B",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const codes = pm.response.json().data.map(d => d.code);",
+                  "pm.test('sees its own two departments', () => pm.expect(codes).to.have.members(['CSE', 'ENG']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Department",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments/{{dept_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments",
+                "{{dept_a_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('is tenant A CSE', () => {",
+                  "  pm.expect(pm.response.json().data.name).to.eql('Department of Computer Science and Engineering');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Department",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Department of Computer Science & Engineering\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments/{{dept_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments",
+                "{{dept_a_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('renamed', () => {",
+                  "  pm.expect(pm.response.json().data.name).to.eql('Department of Computer Science & Engineering');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Deactivate Department",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments/{{dept_b_id}}/deactivate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments",
+                "{{dept_b_id}}",
+                "deactivate"
+              ]
+            },
+            "description": "Soft-deactivates. Departments are never hard-deleted — they own programmes and courses that carry accreditation evidence (invariant I-19)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('now inactive', () => pm.expect(pm.response.json().data.is_active).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Active Departments Only",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments?active=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ],
+              "query": [
+                {
+                  "key": "active",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const codes = pm.response.json().data.map(d => d.code);",
+                  "pm.test('the deactivated department is filtered out', () => pm.expect(codes).to.not.include('CSE'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tenant Isolation",
+      "description": "Cross-tenant access attempts. Every request here must be refused.",
+      "item": [
+        {
+          "name": "Tenant A cannot read a department that exists only in Tenant B",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments/{{dept_b_only_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments",
+                "{{dept_b_only_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('reports not_found', () => pm.expect(pm.response.json().errors.code).to.eql('not_found'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tenant A cannot update a Tenant B department",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Hijacked\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments/{{dept_b_only_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments",
+                "{{dept_b_only_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tenant-scoped request with no tenant header",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('reports tenant_not_specified', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql('tenant_not_specified');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown tenant",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "C-DOES-NOT-EXIST"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('reports tenant_not_found', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql('tenant_not_found');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "SQL in the tenant header is a lookup miss, never a query",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "'; DROP TABLE tenants; --"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            },
+            "description": "The tenant code is a bound parameter, and the schema identifier is derived server-side from a validated grammar. Injection cannot reach DDL."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('reports tenant_not_found', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql('tenant_not_found');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Failure Cases",
+      "description": "Validation and lifecycle failures, with the exact error shapes a client should expect.",
+      "item": [
+        {
+          "name": "Create Tenant — missing required fields (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "const e = pm.response.json().errors;",
+                  "pm.test('errors are keyed by field', () => {",
+                  "  pm.expect(e.code).to.eql([\"can't be blank\"]);",
+                  "  pm.expect(e.name).to.eql([\"can't be blank\"]);",
+                  "  pm.expect(e.institution_type).to.eql([\"can't be blank\"]);",
+                  "  pm.expect(e.autonomy_status).to.eql([\"can't be blank\"]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Tenant — affiliated without a university (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"C-BADAFF\",\n  \"name\": \"Incomplete Affiliated College\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            },
+            "description": "Invariant I-10, enforced in the changeset and again by a database CHECK."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('names the affiliating university', () => {",
+                  "  pm.expect(pm.response.json().errors).to.have.property('affiliating_university');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Tenant — unsupported institution type (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"C-COMBI\",\n  \"name\": \"Combined University\",\n  \"institution_type\": \"COMBINED\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            },
+            "description": "COMBINED was explicitly ruled out by decision D-02: a tenant is one atomic college."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('institution_type is invalid', () => {",
+                  "  pm.expect(pm.response.json().errors.institution_type).to.eql(['is invalid']);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Tenant — duplicate code (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{tenant_a_code}}\",\n  \"name\": \"Duplicate College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('code already taken', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql(['has already been taken']);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Tenant — code yields no schema name (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"!!!!\",\n  \"name\": \"Unnameable College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('the code is rejected', () => pm.expect(pm.response.json().errors).to.have.property('code'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Tenant — unknown id (404)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/999999",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "999999"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('reports not_found', () => pm.expect(pm.response.json().errors.code).to.eql('not_found'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Tenant — refuses an active college (409)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}"
+              ]
+            },
+            "description": "Only a PROVISION_FAILED tenant can be discarded. A college that has been active holds accreditation records and is archived instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('reports not_discardable', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql('not_discardable');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Retry Provisioning — refuses a healthy college (500)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}/retry",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}",
+                "retry"
+              ]
+            },
+            "description": "Retry exists to repair a failed provision, not to rebuild a live college's schema."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('500 with an explicit reason', () => pm.response.to.have.status(500));",
+                  "pm.test('reports provisioning_failed', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql('provisioning_failed');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Department — invalid code (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_a_code}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"C S E!\",\n  \"name\": \"Bad Code Department\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('the code is rejected', () => pm.expect(pm.response.json().errors).to.have.property('code'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Suspended tenant cannot serve requests (403)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "x-tenant",
+                "value": "{{tenant_b_code}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            },
+            "description": "Run 'Suspend Tenant' first. Distinguishes an inactive college (403) from an unknown one (404) — collapsing the two would make a typo indistinguishable from a suspension."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Suspend tenant B so this request has something to be refused by.",
+                  "pm.sendRequest({",
+                  "  url: pm.collectionVariables.get('base_url') + '/api/v1/tenants/' + pm.collectionVariables.get('tenant_b_id') + '/suspend',",
+                  "  method: 'POST',",
+                  "  header: { 'Accept': 'application/json' }",
+                  "}, function () {});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "pm.test('reports tenant_inactive', () => {",
+                  "  pm.expect(pm.response.json().errors.code).to.eql('tenant_inactive');",
+                  "});",
+                  "// Restore tenant B so the collection can be re-run.",
+                  "pm.sendRequest({",
+                  "  url: pm.collectionVariables.get('base_url') + '/api/v1/tenants/' + pm.collectionVariables.get('tenant_b_id') + '/activate',",
+                  "  method: 'POST',",
+                  "  header: { 'Accept': 'application/json' }",
+                  "}, function () {});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "description": "Archives the two colleges this run provisioned. Run last. Archiving is the terminal state for a college that has served requests; it is never deleted, because its schema holds accreditation records.",
+      "item": [
+        {
+          "name": "Archive Tenant A",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}/archive",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_a_id}}",
+                "archive"
+              ]
+            },
+            "description": "Archives the college this run created, so repeated runs do not leave ACTIVE test colleges behind. Archiving retains the schema and all data — a college that has been active holds accreditation records and is never dropped (invariant I-19). To reclaim the schemas entirely, reset the development database: mix ecto.drop && mix ecto.create && mix ecto.migrate"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('now ARCHIVED', () => pm.expect(pm.response.json().data.status).to.eql('ARCHIVED'));",
+                  "pm.test('schema is retained, not dropped', () => {",
+                  "  pm.expect(pm.response.json().data.schema_name).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Archive Tenant B",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants/{{tenant_b_id}}/archive",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants",
+                "{{tenant_b_id}}",
+                "archive"
+              ]
+            },
+            "description": "Archives the college this run created, so repeated runs do not leave ACTIVE test colleges behind. Archiving retains the schema and all data — a college that has been active holds accreditation records and is never dropped (invariant I-19). To reclaim the schemas entirely, reset the development database: mix ecto.drop && mix ecto.create && mix ecto.migrate"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('now ARCHIVED', () => pm.expect(pm.response.json().data.status).to.eql('ARCHIVED'));",
+                  "pm.test('schema is retained, not dropped', () => {",
+                  "  pm.expect(pm.response.json().data.schema_name).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
