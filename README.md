@@ -738,10 +738,12 @@ not exist in tenant A at all.
 ```
 postman/
 ├── AIMS-ERP.postman_collection.json
-└── AIMS-Local.postman_environment.json
+├── AIMS-Local.postman_environment.json
+└── README.md    ← full guide: setup, folder walkthrough, troubleshooting
 ```
 
-Import both into Postman, select the **AIMS Local** environment, and run the
+**[→ postman/README.md](postman/README.md)** covers this in depth. The short
+version: import both files, select the **AIMS Local** environment, and run the
 collection top to bottom. Or from the command line:
 
 ```bash
