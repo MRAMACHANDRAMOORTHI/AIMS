@@ -29,7 +29,7 @@ Elixir · Phoenix · PostgreSQL · Ecto · Triplex · ExUnit · Postman.
 - [Adding a new tenant-domain migration](#adding-a-new-tenant-domain-migration)
 - [API reference](#api-reference)
 - [Running the tests](#running-the-tests)
-- [Using the Postman collection](#using-the-postman-collection)
+- [Using the Postman collections](#using-the-postman-collections)
 - [Security notes](#security-notes)
 - [Roadmap](#roadmap)
 
@@ -733,56 +733,38 @@ not exist in tenant A at all.
 
 ---
 
-## Using the Postman collection
+## Using the Postman collections
 
 ```
 postman/
-├── AIMS-ERP.postman_collection.json
-├── AIMS-Local.postman_environment.json
-└── README.md    ← full guide: setup, folder walkthrough, troubleshooting
+├── AIMS-Platform.postman_collection.json   Tenant management  · 32 requests · 94 assertions
+├── AIMS-ERP.postman_collection.json        Academic domain    · 23 requests · 50 assertions
+├── AIMS-Local.postman_environment.json     Shared environment
+├── build_collections.py                    Generator — edit this, not the JSON
+└── README.md                               Full guide
 ```
 
-**[→ postman/README.md](postman/README.md)** covers this in depth. The short
-version: import both files, select the **AIMS Local** environment, and run the
-collection top to bottom. Or from the command line:
+Two collections, split along the same line as the codebase: the **Platform**
+collection covers onboarding a college and its lifecycle, schema and migrations;
+the **ERP** collection covers everything inside a college's own schema. Each is
+independently runnable — the ERP collection provisions its own colleges.
+
+**[→ postman/README.md](postman/README.md)** is the full guide: setup, folder
+walkthrough, variables, and troubleshooting.
 
 ```bash
-npx newman run postman/AIMS-ERP.postman_collection.json \
-                -e postman/AIMS-Local.postman_environment.json
+npx newman run postman/AIMS-Platform.postman_collection.json                 -e postman/AIMS-Local.postman_environment.json
+
+npx newman run postman/AIMS-ERP.postman_collection.json                 -e postman/AIMS-Local.postman_environment.json
 ```
 
-```
-Folders
-├── Platform            health, reference data
-├── Tenant Management   provision, list, update, lifecycle, migrations
-├── Tenant Context      resolution + the profile each configuration produces
-├── Academic Structure  departments in each tenant
-├── Tenant Isolation    cross-tenant attempts — all must be refused
-├── Failure Cases       422 / 404 / 409 / 403 with exact error shapes
-└── Cleanup             archives the colleges this run created
-```
+Or import all three files into Postman, select the **AIMS Local** environment,
+and run either collection top to bottom.
 
-The collection is **re-runnable**: a collection-level pre-request script mints a
-fresh pair of college codes at the start of each run, so repeated runs do not
-collide on the unique tenant code. Ids are captured into variables as it goes,
-so later folders depend on earlier ones — run the whole collection, not
-individual requests, on a fresh database.
-
-To reclaim the schemas that accumulate across runs:
-
-```bash
-mix ecto.drop && mix ecto.create && mix ecto.migrate
-```
-
-### Environment variables
-
-| Variable | Purpose |
-| --- | --- |
-| `base_url` | `http://localhost:4000` |
-| `token` | Bearer token. Empty in Milestone 1; wired up for the auth milestone. |
-
-`tenant_a_code`, `tenant_b_code`, and the various ids are managed by the
-collection itself.
+Both mint fresh college codes each run, so they are safe to re-run against the
+same database. To reclaim the schemas that accumulate, stop the server first,
+then `mix ecto.drop && mix ecto.create && mix ecto.migrate` — the drop is
+refused while anything holds a connection.
 
 ---
 
