@@ -54,7 +54,7 @@ defmodule AimsWeb.Plugs.ResolveTenant do
         conn
         |> assign(:tenant, tenant)
         |> assign(:tenant_profile, profile)
-        |> put_resp_header("x-resolved-tenant", tenant.code)
+        |> put_resp_header("x-resolved-tenant", tenant.institution_code)
         # The context lives in the process dictionary and Phoenix processes are
         # per-request, but a supervisor may reuse one under some adapters.
         # Clearing on send makes the lifetime explicit rather than assumed.
@@ -85,7 +85,7 @@ defmodule AimsWeb.Plugs.ResolveTenant do
           conn,
           :forbidden,
           "tenant_inactive",
-          "The college #{inspect(tenant.code)} is #{tenant.status} and cannot serve requests."
+          "The college #{inspect(tenant.institution_code)} is #{tenant.lifecycle_status} and cannot serve requests."
         )
 
       {:error, :client_tenant_not_allowed} ->
@@ -121,7 +121,7 @@ defmodule AimsWeb.Plugs.ResolveTenant do
   # Strategy 1. Inert until the auth pipeline exists.
   defp authenticated_tenant(conn) do
     case conn.assigns[:current_membership] do
-      %{tenant: %Aims.Platform.Tenant{status: "ACTIVE"} = tenant} -> {:ok, tenant}
+      %{tenant: %Aims.Platform.Tenant{lifecycle_status: "ACTIVE"} = tenant} -> {:ok, tenant}
       _ -> :none
     end
   end

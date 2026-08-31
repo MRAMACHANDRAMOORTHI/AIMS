@@ -4,7 +4,7 @@ Multi-tenant Academic Information Management System for Indian colleges, built
 to produce **NAAC Criteria 1 (Curricular Aspects)** reporting from real academic
 master data.
 
-Elixir · Phoenix · PostgreSQL · Ecto · ExUnit · Postman.
+Elixir · Phoenix · PostgreSQL · Ecto · Triplex · ExUnit · Postman.
 
 > **Status: Milestone 1 — Tenant Infrastructure.**
 > The platform layer is complete: a college can be provisioned as a tenant with
@@ -23,6 +23,7 @@ Elixir · Phoenix · PostgreSQL · Ecto · ExUnit · Postman.
 - [How tenant schemas work](#how-tenant-schemas-work)
 - [Creating a tenant](#creating-a-tenant)
 - [Tenant resolution](#tenant-resolution)
+- [Dates and times](#dates-and-times)
 - [Writing tenant-scoped code](#writing-tenant-scoped-code)
 - [How tenant migrations work](#how-tenant-migrations-work)
 - [Adding a new tenant-domain migration](#adding-a-new-tenant-domain-migration)
@@ -53,7 +54,14 @@ Confirm it is alive:
 
 ```bash
 curl http://localhost:4000/api/v1/health
-# {"data":{"lagging_tenants":[],"latest_tenant_migration":20250101000001,"status":"ok"}}
+# {"data":{
+#   "status":"ok",
+#   "latest_tenant_migration":20250101000001,
+#   "lagging_tenants":[],
+#   "server_time_utc":"2026-08-31T05:44:56.329000Z",
+#   "server_time_local":"2026-08-31T11:14:56.329000+05:30",
+#   "default_time_zone":"Asia/Kolkata"
+# }}
 ```
 
 ---
@@ -87,8 +95,9 @@ Two layers, deliberately separated.
 | Module | Responsibility |
 | --- | --- |
 | `Aims.Platform` | The platform context. Tenant registry, lifecycle, reference data. |
-| `Aims.Platform.Tenant` | Tenant schema and changesets. Derives `schema_name`; locks immutable fields. |
-| `Aims.Platform.SchemaName` | **Security boundary.** Generates and validates PostgreSQL schema identifiers. |
+| `Aims.Platform.Tenant` | Tenant schema and changesets. Derives `tenant_slug`; locks immutable fields. |
+| `Aims.Platform.TenantSlug` | **Security boundary.** Derives and validates the identifier that reaches DDL. |
+| `Aims.Time` | UTC in, tenant-local ISO 8601 out. The single time-rendering rule. |
 | `Aims.Platform.TenantProfile` | Resolves the two config flags into an immutable capability profile. |
 | `Aims.Platform.Provisioner` | The provisioning saga, with explicit failure and recovery states. |
 | `Aims.Platform.TenantMigrator` | Schema creation, tenant migrations, multi-tenant rollout. |
@@ -96,6 +105,22 @@ Two layers, deliberately separated.
 | `Aims.Tenancy.Repo` | Repo operations bound to the current tenant's schema. |
 | `Aims.Academics` | Academic Structure context. First slice: departments. |
 | `AimsWeb.Plugs.ResolveTenant` | Resolves and validates the tenant for a request. |
+
+### Column naming
+
+One rule, applied consistently:
+
+> Prefix a column with the entity name **only when the table name does not
+> already convey it.**
+
+A row in `tenants` *is* an institution, but the table is named for the platform
+concept — so those columns are `institution_code`, `institution_name`,
+`institution_type`, `autonomy_status`. In `departments` the table name already
+says what `code` and `name` describe, so they stay bare.
+
+`lifecycle_status` is spelled out rather than left as `status`, because the same
+row also carries `autonomy_status` and a bare `status` beside it reads
+ambiguously.
 
 ### Why the two flags matter
 
@@ -135,40 +160,57 @@ Every college gets its own PostgreSQL schema. Tenant tables carry **no
 ```
 aims_dev
 ├── public
-│   ├── tenants                  code, name, schema_name, type, autonomy, status
-│   ├── academic_patterns        SEMESTER / TRIMESTER / ANNUAL
-│   ├── tenant_schema_versions   which tenant has which migration
-│   └── schema_migrations        public migration state
+│   ├── tenants                     institution_code, tenant_slug,
+│   │                               institution_type, autonomy_status,
+│   │                               lifecycle_status, time_zone
+│   ├── academic_term_patterns      SEMESTER / TRIMESTER / ANNUAL
+│   ├── tenant_migration_versions   which college has which migration
+│   └── schema_migrations           public migration state
 │
-├── tenant_c_41207               ABC Institute of Technology
+├── tenant_c_41207                  ABC Institute of Technology
 │   ├── departments
-│   └── schema_migrations        this tenant's migration state
+│   └── schema_migrations           this college's migration state
 │
-└── tenant_c_55891               St Xavier College of Arts and Science
+└── tenant_c_55891                  St Xavier College of Arts and Science
     ├── departments
     └── schema_migrations
 ```
 
+### Multi-tenancy is Triplex
+
+[Triplex](https://hex.pm/packages/triplex) drives the schema plumbing:
+`CREATE SCHEMA`, `DROP SCHEMA`, running the tenant migration line against a
+prefix, and the prefix itself. Configured in `config/config.exs`:
+
+```elixir
+config :triplex, repo: Aims.Repo, tenant_prefix: "tenant_"
+```
+
+**Triplex owns** schema lifecycle, the migration runner and `to_prefix/1`.
+**This codebase keeps** the *grammar* for tenant identifiers, the rollout across
+colleges with per-tenant failure isolation, and the
+`tenant_migration_versions` projection. Triplex has no notion of any of those.
+
 ### Schema naming
 
-`schema_name` is **derived server-side** from the college code, never accepted
-from a client:
+`tenant_slug` is **derived server-side** from the institution code, never
+accepted from a client. Triplex then supplies the prefix:
 
 ```
-"C-41207"  ->  "tenant_c_41207"
+"C-41207"  ->  slug "c_41207"  ->  schema "tenant_c_41207"
 ```
 
-The grammar is deliberately narrow — `tenant_[a-z0-9_]{1,55}` — and enforced in
-three places: `Aims.Platform.SchemaName`, a changeset validation, and a
-PostgreSQL `CHECK` constraint on the column. Schema names are interpolated into
-DDL where no parameter binding is possible, so the only defence is that an
-unsafe name is impossible to construct.
+The grammar is deliberately narrow — `[a-z0-9_]{1,55}` — and enforced in three
+places: `Aims.Platform.TenantSlug`, a changeset validation, and a PostgreSQL
+`CHECK` constraint on the column. The slug is interpolated into DDL where no
+parameter binding is possible, so the only defence is that an unsafe value is
+impossible to construct. Triplex's own reserved-tenant list is consulted too.
 
 ### Foreign keys never cross a schema boundary
 
 Tenant tables reference platform reference data by **stable string code**, not
 by foreign key. For example a programme will hold `pattern_code = "SEMESTER"`
-rather than a FK into `public.academic_patterns`.
+rather than a FK into `public.academic_term_patterns`.
 
 This keeps each tenant schema independently dumpable and restorable, which is
 the main reason to choose schema-per-tenant for accreditation data:
@@ -187,10 +229,11 @@ pg_dump -n tenant_c_41207 aims_dev > abc_institute.sql
 curl -X POST http://localhost:4000/api/v1/tenants \
   -H 'Content-Type: application/json' \
   -d '{
-        "code": "C-41207",
-        "name": "ABC Institute of Technology",
+        "institution_code": "C-41207",
+        "institution_name": "ABC Institute of Technology",
         "institution_type": "ENGINEERING",
-        "autonomy_status": "AUTONOMOUS"
+        "autonomy_status": "AUTONOMOUS",
+        "time_zone": "Asia/Kolkata"
       }'
 ```
 
@@ -201,8 +244,8 @@ required to report BoS and syllabus compliance against its parent university:
 curl -X POST http://localhost:4000/api/v1/tenants \
   -H 'Content-Type: application/json' \
   -d '{
-        "code": "C-55891",
-        "name": "St Xavier College of Arts and Science",
+        "institution_code": "C-55891",
+        "institution_name": "St Xavier College of Arts and Science",
         "institution_type": "ARTS_SCIENCE",
         "autonomy_status": "AFFILIATED",
         "affiliating_university": "University of Madras"
@@ -215,8 +258,8 @@ curl -X POST http://localhost:4000/api/v1/tenants \
 iex -S mix
 
 {:ok, tenant} = Aims.Platform.create_tenant(%{
-  "code" => "C-41207",
-  "name" => "ABC Institute of Technology",
+  "institution_code" => "C-41207",
+  "institution_name" => "ABC Institute of Technology",
   "institution_type" => "ENGINEERING",
   "autonomy_status" => "AUTONOMOUS"
 })
@@ -229,9 +272,8 @@ insert registry row (PROVISIONING)   ← committed first, so an orphan schema is
         ↓
 check for a schema-name collision
         ↓
-CREATE SCHEMA tenant_c_41207
-        ↓
-run every tenant migration into that schema
+Triplex.create -> CREATE SCHEMA tenant_c_41207
+                  + run every tenant migration, in one transaction
         ↓
 seed initial records                 ← extension point; nothing to seed today
         ↓
@@ -324,6 +366,68 @@ config :aims, allow_client_supplied_tenant: false
 
 after which a client-named tenant is refused outright. Nothing downstream
 changes, because everything downstream already reads the resolved profile.
+
+---
+
+## Dates and times
+
+One rule, applied everywhere:
+
+```
+PostgreSQL stores UTC        every timestamp column is timestamptz
+Elixir holds UTC             every DateTime in the domain is UTC
+The API returns local time   ISO 8601 with an explicit offset
+```
+
+A response looks like this:
+
+```json
+{ "inserted_at": "2026-08-31T11:13:36.573000+05:30", "time_zone": "Asia/Kolkata" }
+```
+
+### Why the offset matters more than the zone
+
+Returning `"2026-08-31T11:13:36"` and telling clients "it's IST" is exactly the
+confusion this design prevents — a client that assumes UTC is wrong by five and
+a half hours and nothing in the payload says so.
+
+`+05:30` in the string cannot be misread. Every ISO 8601 parser in every
+language handles it, and `Date.parse()` in JavaScript yields the correct instant
+without the client knowing anything about India.
+
+### Which zone is used
+
+| Response | Zone |
+| --- | --- |
+| Tenant-scoped (`/departments`, `/tenant`) | That college's `time_zone` |
+| Platform-level (`/tenants`, `/health`) | `config :aims, :default_time_zone` |
+
+`tenants.time_zone` defaults to `Asia/Kolkata` and is validated on write against
+the IANA database, so an unusable zone is rejected at the API rather than
+silently degrading every later response. It affects **presentation only** —
+stored values never move.
+
+```bash
+# Confirm at a glance that storage is UTC and presentation is IST
+curl http://localhost:4000/api/v1/health
+```
+
+The time zone database is [`tz`](https://hex.pm/packages/tz), chosen over
+`tzdata` because tzdata pulls in `hackney` for auto-updates and hackney
+currently carries four open CVEs including one rated HIGH.
+
+### In code
+
+```elixir
+Aims.Time.utc_now()                              # the only way to read the clock
+Aims.Time.render(dt, "Asia/Kolkata")             # "...+05:30"
+Aims.Time.render(dt)                             # platform default zone
+```
+
+Never convert by hand. `DateTime.add(dt, 19_800)` looks tempting because IST has
+no daylight saving, but it produces a `DateTime` whose `time_zone` says
+`Etc/UTC` while its fields say otherwise, and it stops being correct the moment
+a non-IST college exists.
 
 ---
 
@@ -438,7 +542,7 @@ task exits non-zero and names every tenant that failed:
 Ecto maintains a `schema_migrations` table **inside each tenant schema**. That
 is the authority — it is what the migrator reads to decide what is pending.
 
-`public.tenant_schema_versions` is a projection of those tables, refreshed after
+`public.tenant_migration_versions` is a projection of those tables, refreshed after
 every run, so the orchestrator can find lagging tenants with one query instead
 of opening every schema. It never decides whether a migration runs.
 
@@ -472,7 +576,7 @@ curl http://localhost:4000/api/v1/tenants/1/schema  # one tenant's exact state
          add :owning_department_id, references(:departments, on_delete: :restrict), null: false
          add :code, :string, size: 50, null: false
          add :name, :string, size: 255, null: false
-         add :pattern_code, :string, size: 20, null: false   # public.academic_patterns.code
+         add :pattern_code, :string, size: 20, null: false   # public.academic_term_patterns.code
          timestamps(type: :utc_datetime_usec)
        end
 
@@ -511,8 +615,8 @@ Base path `/api/v1`. All responses are JSON.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness, tenant migration line, lagging tenants |
-| `GET` | `/academic-patterns` | Delivery patterns reference data |
+| `GET` | `/health` | Liveness, tenant migration line, lagging colleges, server clock in UTC **and** local |
+| `GET` | `/academic-term-patterns` | Term patterns reference data (SEMESTER / TRIMESTER / ANNUAL) |
 
 ### Tenant management — no tenant resolved
 
@@ -521,7 +625,7 @@ Base path `/api/v1`. All responses are JSON.
 | `GET` | `/tenants` | List tenants; `?status=ACTIVE` filters |
 | `POST` | `/tenants` | Register **and provision** a college |
 | `GET` | `/tenants/:id` | Show one tenant |
-| `PATCH` `PUT` | `/tenants/:id` | Update name / affiliating university |
+| `PATCH` `PUT` | `/tenants/:id` | Update `institution_name`, `affiliating_university`, `time_zone` |
 | `DELETE` | `/tenants/:id` | Discard a `PROVISION_FAILED` tenant |
 | `GET` | `/tenants/:id/schema` | Schema existence and migration state |
 | `POST` | `/tenants/:id/migrations` | Migrate one tenant |
@@ -547,7 +651,18 @@ Base path `/api/v1`. All responses are JSON.
 Success wraps a `data` key:
 
 ```json
-{ "data": { "id": 1, "code": "C-41207", "status": "ACTIVE" } }
+{
+  "data": {
+    "id": 1,
+    "institution_code": "C-41207",
+    "institution_name": "ABC Institute of Technology",
+    "tenant_slug": "c_41207",
+    "schema_name": "tenant_c_41207",
+    "lifecycle_status": "ACTIVE",
+    "time_zone": "Asia/Kolkata",
+    "inserted_at": "2026-08-31T11:13:36.573000+05:30"
+  }
+}
 ```
 
 Two error shapes, both under `errors`, unambiguous to tell apart — a reasoned
@@ -559,7 +674,13 @@ no `detail`:
 ```
 
 ```json
-{ "errors": { "code": ["has already been taken"], "affiliating_university": ["is required for an affiliated college"] } }
+{
+  "errors": {
+    "institution_code": ["has already been taken"],
+    "affiliating_university": ["is required for an affiliated college"],
+    "time_zone": ["is not a recognised IANA time zone, for example Asia/Kolkata"]
+  }
+}
 ```
 
 | Status | When |
@@ -592,7 +713,8 @@ exercised.
 
 | Path | Covers |
 | --- | --- |
-| `test/aims/platform/schema_name_test.exs` | Identifier grammar, adversarially |
+| `test/aims/platform/tenant_slug_test.exs` | Identifier grammar, adversarially |
+| `test/aims/time_test.exs` | UTC storage, IST rendering, offset correctness |
 | `test/aims/platform/tenant_test.exs` | Changesets, immutable fields, mass assignment |
 | `test/aims/platform/tenant_profile_test.exs` | All four institution configurations |
 | `test/aims/platform/provisioner_test.exs` | Provisioning, failure, retry, discard |
@@ -669,11 +791,12 @@ leaked row, it is one college reading another college's accreditation data.
 
 | Risk | Mitigation |
 | --- | --- |
-| Schema-name injection | `Aims.Platform.SchemaName.safe!/1` guards every interpolation into DDL. Grammar is `tenant_[a-z0-9_]{1,55}`, enforced again by a database `CHECK`. |
+| Schema-name injection | `Aims.Platform.TenantSlug.safe!/1` guards every interpolation into DDL, including everything handed to Triplex. Grammar is `[a-z0-9_]{1,55}`, enforced again by a database `CHECK`. |
 | SQL injection | All values are bound parameters. The only interpolated identifiers are schema names, which pass the guard above. |
 | Cross-tenant reads | Every tenant query carries an explicit prefix. No prefix means an error, never a fallback to another schema. |
 | Unauthorised tenant switching | ⚠️ **Open in Milestone 1** — see [Tenant resolution](#tenant-resolution). |
-| Mass assignment | Changesets cast an explicit field list. `code`, `schema_name`, `institution_type`, `autonomy_status` and `status` cannot be set or changed by a client. |
+| Vulnerable dependencies | `mix deps.get` reports advisories. `tzdata` was rejected for this reason; `tz` is used instead. Re-check on every dependency bump. |
+| Mass assignment | Changesets cast an explicit field list. `institution_code`, `tenant_slug`, `institution_type`, `autonomy_status` and `lifecycle_status` cannot be set or changed by a client. |
 | Error leakage | Errors carry a stable machine-readable code and a human message. Stack traces and raw driver errors are not returned. |
 | Accidental data loss | `PROVISION_FAILED` is the only deletable state. Everything else archives. |
 
@@ -708,7 +831,7 @@ approved architecture, not feature appeal.
 | Milestone | Contents |
 | --- | --- |
 | **1 — Tenant infrastructure** ✅ | Registry, provisioning, schema isolation, tenant migrations, resolution, tenant API |
-| **2 — Identity & authorisation** | Users, tenant membership, roles, authenticated tenant resolution, audit log. Closes the open security item above. |
+| **2 — Identity & authorisation** | Users, tenant membership, roles, authenticated tenant resolution, audit log. Closes the open security item above, and gives `departments.hod_user_id` something real to point at. |
 | **3 — Academic Structure** | Programmes and the course catalogue. A course carries **no** `is_elective` or `semester` — role is contextual to a curriculum. |
 | **4 — Academic Execution** | Academic years, batches, operational term schedules with real dates per cohort |
 | **5 — Curriculum** | Versioned curricula by admission batch, curriculum terms, core bindings, publish lifecycle |

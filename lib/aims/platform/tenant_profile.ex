@@ -1,7 +1,7 @@
 defmodule Aims.Platform.TenantProfile do
   @moduledoc """
-  The resolved configuration of one tenant, computed once at the edge of a
-  request from the tenant's two flags.
+  The resolved configuration of one college, computed once at the edge of a
+  request from its two flags.
 
   This is the mechanism the approved architecture prescribes in §20 to keep the
   four-way institution matrix out of the rest of the codebase. The rule it
@@ -14,11 +14,12 @@ defmodule Aims.Platform.TenantProfile do
   adopted OBE" — which the source explicitly anticipates at p.2 and p.16 — a
   data change rather than a code change.
 
-  Milestone 1 derives features from the two flags. When per-tenant feature
-  overrides land, only `for_tenant/1` changes; no call site does.
+  The profile also carries `tenant_slug` (which schema to query) and `time_zone`
+  (how to render timestamps back), so a request needs nothing else from the
+  registry once it is resolved.
   """
 
-  alias Aims.Platform.Tenant
+  alias Aims.Platform.{Tenant, TenantSlug}
 
   @type feature ::
           :obe_mapping
@@ -28,11 +29,13 @@ defmodule Aims.Platform.TenantProfile do
 
   @type t :: %__MODULE__{
           tenant_id: integer(),
-          code: String.t(),
-          name: String.t(),
-          schema_name: String.t(),
+          institution_code: String.t(),
+          institution_name: String.t(),
           institution_type: String.t(),
           autonomy_status: String.t(),
+          tenant_slug: String.t(),
+          schema_name: String.t(),
+          time_zone: String.t(),
           criteria_scale: 100 | 150,
           experiential_variant: :industry | :field,
           features: %{feature() => boolean()}
@@ -40,29 +43,32 @@ defmodule Aims.Platform.TenantProfile do
 
   @enforce_keys [
     :tenant_id,
-    :code,
-    :name,
-    :schema_name,
+    :institution_code,
+    :institution_name,
     :institution_type,
     :autonomy_status,
+    :tenant_slug,
+    :schema_name,
+    :time_zone,
     :criteria_scale,
     :experiential_variant,
     :features
   ]
 
-  @derive Jason.Encoder
   defstruct @enforce_keys
 
-  @doc "Resolves a tenant row into its immutable runtime profile."
+  @doc "Resolves a registry row into its immutable runtime profile."
   @spec for_tenant(Tenant.t()) :: t()
   def for_tenant(%Tenant{} = tenant) do
     %__MODULE__{
       tenant_id: tenant.id,
-      code: tenant.code,
-      name: tenant.name,
-      schema_name: tenant.schema_name,
+      institution_code: tenant.institution_code,
+      institution_name: tenant.institution_name,
       institution_type: tenant.institution_type,
       autonomy_status: tenant.autonomy_status,
+      tenant_slug: tenant.tenant_slug,
+      schema_name: TenantSlug.to_schema(tenant.tenant_slug),
+      time_zone: tenant.time_zone || Aims.Time.default_zone(),
       criteria_scale: criteria_scale(tenant.autonomy_status),
       experiential_variant: experiential_variant(tenant.institution_type),
       features: features(tenant)
@@ -70,9 +76,9 @@ defmodule Aims.Platform.TenantProfile do
   end
 
   @doc """
-  Whether a named capability is enabled for this tenant.
+  Whether a named capability is enabled for this college.
 
-  The only sanctioned way for domain code to vary its behaviour by institution.
+  The only sanctioned way for domain code to vary behaviour by institution.
   """
   @spec feature?(t(), feature()) :: boolean()
   def feature?(%__MODULE__{features: features}, feature) do

@@ -18,7 +18,7 @@ defmodule AimsWeb.Router do
     pipe_through :platform_api
 
     get "/health", PlatformController, :health
-    get "/academic-patterns", PlatformController, :academic_patterns
+    get "/academic-term-patterns", PlatformController, :academic_term_patterns
 
     # Tenant management. `/tenants/migrations` is two segments and
     # `/tenants/:id/migrations` is three, so they cannot collide.

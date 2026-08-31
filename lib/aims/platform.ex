@@ -10,7 +10,7 @@ defmodule Aims.Platform do
 
   import Ecto.Query, warn: false
 
-  alias Aims.Platform.{AcademicPattern, Provisioner, Tenant, TenantProfile}
+  alias Aims.Platform.{AcademicTermPattern, Provisioner, Tenant, TenantProfile}
   alias Aims.Repo
 
   # ── Tenants ────────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ defmodule Aims.Platform do
   @doc "Fetches a tenant by its AISHE / NAAC code."
   @spec fetch_tenant_by_code(String.t()) :: {:ok, Tenant.t()} | {:error, :not_found}
   def fetch_tenant_by_code(code) when is_binary(code) do
-    case Repo.get_by(Tenant, code: code) do
+    case Repo.get_by(Tenant, institution_code: code) do
       nil -> {:error, :not_found}
       tenant -> {:ok, tenant}
     end
@@ -56,7 +56,7 @@ defmodule Aims.Platform do
           {:ok, Tenant.t()} | {:error, :not_found} | {:error, {:inactive, Tenant.t()}}
   def fetch_active_tenant_by_code(code) do
     with {:ok, tenant} <- fetch_tenant_by_code(code) do
-      case tenant.status do
+      case tenant.lifecycle_status do
         "ACTIVE" -> {:ok, tenant}
         _ -> {:error, {:inactive, tenant}}
       end
@@ -87,17 +87,17 @@ defmodule Aims.Platform do
   """
   @spec suspend_tenant(Tenant.t()) :: {:ok, Tenant.t()} | {:error, Ecto.Changeset.t()}
   def suspend_tenant(%Tenant{} = tenant),
-    do: Repo.update(Tenant.status_changeset(tenant, "SUSPENDED"))
+    do: Repo.update(Tenant.lifecycle_changeset(tenant, "SUSPENDED"))
 
   @doc "Returns a suspended tenant to service."
   @spec activate_tenant(Tenant.t()) :: {:ok, Tenant.t()} | {:error, Ecto.Changeset.t()}
   def activate_tenant(%Tenant{} = tenant),
-    do: Repo.update(Tenant.status_changeset(tenant, "ACTIVE"))
+    do: Repo.update(Tenant.lifecycle_changeset(tenant, "ACTIVE"))
 
   @doc "Archives a tenant. Terminal, non-serving, data retained."
   @spec archive_tenant(Tenant.t()) :: {:ok, Tenant.t()} | {:error, Ecto.Changeset.t()}
   def archive_tenant(%Tenant{} = tenant),
-    do: Repo.update(Tenant.status_changeset(tenant, "ARCHIVED"))
+    do: Repo.update(Tenant.lifecycle_changeset(tenant, "ARCHIVED"))
 
   @doc "A changeset for form/validation surfaces."
   @spec change_tenant(Tenant.t(), map()) :: Ecto.Changeset.t()
@@ -110,22 +110,22 @@ defmodule Aims.Platform do
 
   # ── Platform reference data ────────────────────────────────────────────────
 
-  @doc "Delivery patterns. Platform-wide, not per tenant (contradiction C-11)."
-  @spec list_academic_patterns() :: [AcademicPattern.t()]
-  def list_academic_patterns do
-    AcademicPattern |> order_by([p], asc: p.terms_per_year) |> Repo.all()
+  @doc "Term patterns. Platform-wide, not per tenant (contradiction C-11)."
+  @spec list_academic_term_patterns() :: [AcademicTermPattern.t()]
+  def list_academic_term_patterns do
+    AcademicTermPattern |> order_by([p], asc: p.terms_per_year) |> Repo.all()
   end
 
-  @doc "Fetches a delivery pattern by code."
-  @spec fetch_academic_pattern(String.t()) ::
-          {:ok, AcademicPattern.t()} | {:error, :not_found}
-  def fetch_academic_pattern(code) when is_binary(code) do
-    case Repo.get(AcademicPattern, code) do
+  @doc "Fetches a term pattern by code."
+  @spec fetch_academic_term_pattern(String.t()) ::
+          {:ok, AcademicTermPattern.t()} | {:error, :not_found}
+  def fetch_academic_term_pattern(code) when is_binary(code) do
+    case Repo.get(AcademicTermPattern, code) do
       nil -> {:error, :not_found}
       pattern -> {:ok, pattern}
     end
   end
 
   defp filter_by_status(query, nil), do: query
-  defp filter_by_status(query, status), do: where(query, [t], t.status == ^status)
+  defp filter_by_status(query, status), do: where(query, [t], t.lifecycle_status == ^status)
 end

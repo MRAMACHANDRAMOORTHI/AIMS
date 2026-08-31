@@ -47,7 +47,7 @@ defmodule Mix.Tasks.Aims.Tenants.Migrate do
   defp migrate_all(opts) do
     migrate_opts =
       if opts[:all_statuses] do
-        [statuses: Aims.Platform.Tenant.statuses()]
+        [statuses: Aims.Platform.Tenant.lifecycle_statuses()]
       else
         []
       end
@@ -74,11 +74,11 @@ defmodule Mix.Tasks.Aims.Tenants.Migrate do
         case TenantMigrator.migrate(tenant) do
           {:ok, applied} ->
             Mix.shell().info(
-              "ok  #{tenant.code} (#{tenant.schema_name}) — applied #{length(applied)} migration(s)"
+              "ok  #{tenant.institution_code} (#{Aims.Platform.Tenant.schema_name(tenant)}) — applied #{length(applied)} migration(s)"
             )
 
           {:error, reason} ->
-            Mix.shell().error("FAILED #{tenant.code}: #{describe(reason)}")
+            Mix.shell().error("FAILED #{tenant.institution_code}: #{describe(reason)}")
             exit({:shutdown, 1})
         end
 

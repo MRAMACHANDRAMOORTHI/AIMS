@@ -11,12 +11,13 @@ defmodule Aims.Platform.TenantProfileTest do
   defp tenant(type, autonomy) do
     %Tenant{
       id: 1,
-      code: "C-1",
-      name: "Test College",
-      schema_name: "tenant_c_1",
+      institution_code: "C-1",
+      institution_name: "Test College",
+      tenant_slug: "c_1",
       institution_type: type,
       autonomy_status: autonomy,
-      status: "ACTIVE"
+      lifecycle_status: "ACTIVE",
+      time_zone: "Asia/Kolkata"
     }
   end
 
@@ -101,7 +102,18 @@ defmodule Aims.Platform.TenantProfileTest do
 
   test "carries the schema name that scopes every query" do
     profile = TenantProfile.for_tenant(tenant("ENGINEERING", "AUTONOMOUS"))
+    assert profile.tenant_slug == "c_1"
     assert profile.schema_name == "tenant_c_1"
     assert profile.tenant_id == 1
+  end
+
+  test "carries the time zone used to render this college's timestamps" do
+    profile = TenantProfile.for_tenant(tenant("ENGINEERING", "AUTONOMOUS"))
+    assert profile.time_zone == "Asia/Kolkata"
+  end
+
+  test "falls back to the platform default when a college has no zone" do
+    bare = %{tenant("ENGINEERING", "AUTONOMOUS") | time_zone: nil}
+    assert TenantProfile.for_tenant(bare).time_zone == Aims.Time.default_zone()
   end
 end

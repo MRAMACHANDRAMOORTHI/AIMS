@@ -1,6 +1,6 @@
-defmodule Aims.Platform.AcademicPattern do
+defmodule Aims.Platform.AcademicTermPattern do
   @moduledoc """
-  A delivery pattern: SEMESTER (2 terms/year), TRIMESTER (3) or ANNUAL (1).
+  A term pattern: SEMESTER (2 terms/year), TRIMESTER (3) or ANNUAL (1).
 
   Lives in `public` rather than in each tenant schema. The source seeded these
   per tenant (p.26, p.41); the approved architecture moves them out
@@ -16,7 +16,7 @@ defmodule Aims.Platform.AcademicPattern do
   @primary_key {:code, :string, autogenerate: false}
   @derive {Jason.Encoder, only: [:code, :name, :terms_per_year]}
 
-  schema "academic_patterns" do
+  schema "academic_term_patterns" do
     field :name, :string
     field :terms_per_year, :integer
   end
@@ -27,7 +27,7 @@ defmodule Aims.Platform.AcademicPattern do
           terms_per_year: pos_integer() | nil
         }
 
-  @doc "The number of terms a programme on this pattern runs per academic year."
+  @doc "How many terms a programme on this pattern runs per academic year."
   @spec terms_per_year(t()) :: pos_integer()
   def terms_per_year(%__MODULE__{terms_per_year: n}), do: n
 

@@ -19,12 +19,15 @@ defmodule Aims.Tenancy.IsolationTest do
 
   setup do
     tenant_a =
-      tenant_fixture(%{"code" => "C-AAA111", "name" => "Alpha Institute of Technology"})
+      tenant_fixture(%{
+        "institution_code" => "C-AAA111",
+        "institution_name" => "Alpha Institute of Technology"
+      })
 
     tenant_b =
       tenant_fixture(%{
-        "code" => "C-BBB222",
-        "name" => "Beta College of Arts and Science",
+        "institution_code" => "C-BBB222",
+        "institution_name" => "Beta College of Arts and Science",
         "institution_type" => "ARTS_SCIENCE"
       })
 
@@ -38,15 +41,15 @@ defmodule Aims.Tenancy.IsolationTest do
 
   describe "the two tenants are physically distinct" do
     test "each has its own schema", %{tenant_a: a, tenant_b: b} do
-      assert a.schema_name == "tenant_c_aaa111"
-      assert b.schema_name == "tenant_c_bbb222"
-      refute a.schema_name == b.schema_name
+      assert Aims.Platform.Tenant.schema_name(a) == "tenant_c_aaa111"
+      assert Aims.Platform.Tenant.schema_name(b) == "tenant_c_bbb222"
+      refute Aims.Platform.Tenant.schema_name(a) == Aims.Platform.Tenant.schema_name(b)
     end
 
     test "both schemas exist independently", %{tenant_a: a, tenant_b: b} do
       alias Aims.Platform.TenantMigrator
-      assert TenantMigrator.schema_exists?(a.schema_name)
-      assert TenantMigrator.schema_exists?(b.schema_name)
+      assert TenantMigrator.schema_exists?(a)
+      assert TenantMigrator.schema_exists?(b)
     end
   end
 
@@ -204,14 +207,14 @@ defmodule Aims.Tenancy.IsolationTest do
       %{rows: [[count_a]]} =
         Ecto.Adapters.SQL.query!(
           Repo,
-          ~s|SELECT count(*) FROM "#{a.schema_name}".departments|,
+          ~s|SELECT count(*) FROM "#{Aims.Platform.Tenant.schema_name(a)}".departments|,
           []
         )
 
       %{rows: [[count_b]]} =
         Ecto.Adapters.SQL.query!(
           Repo,
-          ~s|SELECT count(*) FROM "#{b.schema_name}".departments|,
+          ~s|SELECT count(*) FROM "#{Aims.Platform.Tenant.schema_name(b)}".departments|,
           []
         )
 

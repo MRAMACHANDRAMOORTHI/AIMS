@@ -47,7 +47,7 @@ defmodule AimsWeb.FallbackController do
     |> json(
       ErrorJSON.error(
         "provisioning_failed",
-        "Provisioning #{tenant.code} failed and the college was left as #{tenant.status}. " <>
+        "Provisioning #{tenant.institution_code} failed and the college was left as #{tenant.lifecycle_status}. " <>
           "Retry it once the cause is fixed. Reason: #{describe(reason)}"
       )
     )

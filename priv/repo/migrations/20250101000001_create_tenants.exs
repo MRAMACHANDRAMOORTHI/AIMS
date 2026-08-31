@@ -4,36 +4,54 @@ defmodule Aims.Repo.Migrations.CreateTenants do
   @moduledoc """
   `public.tenants` — the platform registry of onboarded colleges.
 
-  Follows the approved architecture (§16, public schema). Two flags on this row
-  configure the entire behaviour of the tenant application:
+  ## Column naming
+
+  A row in this table *is* an institution, but the table name says "tenant", so
+  the institution-describing columns carry an explicit `institution_` prefix.
+  Elsewhere — `departments.code`, `departments.name` — the table name already
+  conveys the entity and bare column names are used. That is the naming rule
+  applied throughout this schema.
+
+  ## Two flags drive the whole application
 
     * `institution_type` decides which FIELDS apply (OBE / CO-PO for engineering)
     * `autonomy_status`  decides which MARKS apply (100 affiliated / 150 autonomous)
 
   Both are resolved once per request into a `TenantProfile`; nothing downstream
   branches on the raw values.
+
+  ## `tenant_slug`, not `schema_name`
+
+  The slug is the Triplex tenant identifier. The PostgreSQL schema is derived
+  from it as `Triplex.to_prefix(slug)` — `"c_41207"` becomes `"tenant_c_41207"`.
+  Storing only the slug keeps one source of truth: the prefix belongs to Triplex
+  configuration, not to a duplicated column that could drift out of step with it.
   """
 
   def up do
     create table(:tenants) do
-      # AISHE / NAAC track code. Present in the source at p.18 and lost by p.23;
-      # restored here because NAAC submissions are keyed by track code.
-      add :code, :string, size: 50, null: false
-      add :name, :string, size: 255, null: false
-      add :schema_name, :string, size: 63, null: false
-
+      # AISHE / NAAC track code. Also the tenant resolution key.
+      add :institution_code, :string, size: 50, null: false
+      add :institution_name, :string, size: 255, null: false
       add :institution_type, :string, size: 20, null: false
       add :autonomy_status, :string, size: 20, null: false
       add :affiliating_university, :string, size: 255
 
-      add :status, :string, size: 20, null: false, default: "PROVISIONING"
+      # Triplex tenant identifier; schema = "tenant_" <> tenant_slug.
+      add :tenant_slug, :string, size: 55, null: false
 
-      timestamps(type: :utc_datetime_usec)
+      add :lifecycle_status, :string, size: 20, null: false, default: "PROVISIONING"
+
+      # IANA zone used to render this college's timestamps in API responses.
+      # Storage is always UTC; this only affects presentation.
+      add :time_zone, :string, size: 50, null: false, default: "Asia/Kolkata"
+
+      timestamps(type: :timestamptz)
     end
 
-    create unique_index(:tenants, [:code])
-    create unique_index(:tenants, [:schema_name])
-    create index(:tenants, [:status])
+    create unique_index(:tenants, [:institution_code])
+    create unique_index(:tenants, [:tenant_slug])
+    create index(:tenants, [:lifecycle_status])
 
     create constraint(:tenants, :tenants_institution_type_valid,
              check: "institution_type IN ('ENGINEERING','ARTS_SCIENCE')"
@@ -43,24 +61,22 @@ defmodule Aims.Repo.Migrations.CreateTenants do
              check: "autonomy_status IN ('AFFILIATED','AUTONOMOUS')"
            )
 
-    create constraint(:tenants, :tenants_status_valid,
+    create constraint(:tenants, :tenants_lifecycle_status_valid,
              check:
-               "status IN ('PROVISIONING','ACTIVE','SUSPENDED','ARCHIVED','PROVISION_FAILED')"
+               "lifecycle_status IN ('PROVISIONING','ACTIVE','SUSPENDED','ARCHIVED','PROVISION_FAILED')"
            )
 
-    # Architecture §16 / invariant I-10: an affiliated college must name its
-    # parent university, because it reports BoS and syllabus compliance against it.
+    # Invariant I-10: an affiliated college must name its parent university,
+    # because it reports BoS and syllabus compliance against it.
     create constraint(:tenants, :tenants_affiliation_required,
              check:
                "autonomy_status <> 'AFFILIATED' OR (affiliating_university IS NOT NULL AND length(btrim(affiliating_university)) > 0)"
            )
 
-    # Defence in depth for Aims.Platform.SchemaName. Even if application
-    # validation were bypassed, the database refuses to store an identifier
-    # that is unsafe to interpolate into DDL.
-    create constraint(:tenants, :tenants_schema_name_format,
-             check: "schema_name ~ '^tenant_[a-z0-9_]{1,55}$'"
-           )
+    # Defence in depth for Aims.Platform.TenantSlug. The slug reaches PostgreSQL
+    # inside `CREATE SCHEMA`, where no parameter binding is possible, so the
+    # database refuses to store anything that would be unsafe to interpolate.
+    create constraint(:tenants, :tenants_slug_format, check: "tenant_slug ~ '^[a-z0-9_]{1,55}$'")
   end
 
   def down do

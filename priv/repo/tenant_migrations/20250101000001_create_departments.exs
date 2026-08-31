@@ -4,24 +4,31 @@ defmodule Aims.Repo.TenantMigrations.CreateDepartments do
   @moduledoc """
   `departments` — the first table of the Academic Structure context.
 
-  Runs inside every tenant schema. Note what is absent: there is no `tenant_id`
-  column. Isolation is the schema boundary itself (architecture NFR-04), which
+  Runs inside every tenant schema, applied by Triplex. Note what is absent:
+  there is no `tenant_id` column. Isolation is the schema boundary itself, which
   is why this migration is prefix-driven and carries no tenancy of its own.
 
-  A department owns both programmes and courses (decision D-06). `head_user_id`
-  is an unconstrained integer on purpose: identity lives in `public.users`, and
-  foreign keys must never cross a schema boundary (architecture §7). It is
-  resolved by the application, not by the database.
+  Column names are bare — `code`, `name` — because the table name already says
+  what they describe. The `institution_*` prefixes on `public.tenants` exist
+  only because that table is named for the platform concept, not the entity.
+
+  A department owns both programmes and courses (decision D-06). Those arrive
+  in Milestone 3.
   """
 
   def up do
     create table(:departments) do
       add :code, :string, size: 20, null: false
       add :name, :string, size: 255, null: false
-      add :head_user_id, :integer
+
+      # Head of Department. Points at `public.users.id` and is deliberately not
+      # a foreign key: identity lives in the public schema, and foreign keys
+      # must never cross a schema boundary. Resolved by the application.
+      add :hod_user_id, :integer
+
       add :is_active, :boolean, null: false, default: true
 
-      timestamps(type: :utc_datetime_usec)
+      timestamps(type: :timestamptz)
     end
 
     create unique_index(:departments, [:code])

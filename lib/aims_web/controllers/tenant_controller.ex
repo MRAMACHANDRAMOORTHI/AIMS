@@ -101,9 +101,9 @@ defmodule AimsWeb.TenantController do
     with {:ok, tenant} <- Platform.fetch_tenant(id) do
       render(conn, :schema_status,
         tenant: tenant,
-        exists: TenantMigrator.schema_exists?(tenant.schema_name),
-        applied: TenantMigrator.applied_versions(tenant.schema_name),
-        pending: TenantMigrator.pending_versions(tenant.schema_name)
+        exists: TenantMigrator.schema_exists?(tenant),
+        applied: TenantMigrator.applied_versions(tenant),
+        pending: TenantMigrator.pending_versions(tenant)
       )
     end
   end
@@ -116,8 +116,8 @@ defmodule AimsWeb.TenantController do
           render(conn, :schema_status,
             tenant: tenant,
             exists: true,
-            applied: TenantMigrator.applied_versions(tenant.schema_name),
-            pending: TenantMigrator.pending_versions(tenant.schema_name)
+            applied: TenantMigrator.applied_versions(tenant),
+            pending: TenantMigrator.pending_versions(tenant)
           )
 
         {:error, reason} ->

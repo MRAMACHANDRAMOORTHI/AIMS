@@ -130,14 +130,19 @@
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "const d = pm.response.json().data;",
                   "pm.test('reports ok', () => pm.expect(d.status).to.eql('ok'));",
-                  "pm.test('exposes the tenant migration line', () => pm.expect(d).to.have.property('latest_tenant_migration'));"
+                  "pm.test('exposes the tenant migration line', () => pm.expect(d).to.have.property('latest_tenant_migration'));",
+                  "pm.test('reports UTC and local server time, each with its offset', () => {",
+                  "  pm.expect(d.server_time_utc).to.match(/Z$/);",
+                  "  pm.expect(d.server_time_local).to.match(/\\+05:30$/);",
+                  "  pm.expect(d.default_time_zone).to.eql('Asia/Kolkata');",
+                  "});"
                 ]
               }
             }
           ]
         },
         {
-          "name": "List Academic Patterns",
+          "name": "List Academic Term Patterns",
           "request": {
             "method": "GET",
             "header": [
@@ -147,14 +152,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/academic-patterns",
+              "raw": "{{base_url}}/api/v1/academic-term-patterns",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "v1",
-                "academic-patterns"
+                "academic-term-patterns"
               ]
             },
             "description": "Delivery patterns. Platform-wide reference data held in the public schema, not copied per tenant (architecture contradiction C-11)."
@@ -199,7 +204,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"{{tenant_a_code}}\",\n  \"name\": \"ABC Institute of Technology\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+              "raw": "{\n  \"institution_code\": \"{{tenant_a_code}}\",\n  \"institution_name\": \"ABC Institute of Technology\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\",\n  \"time_zone\": \"Asia/Kolkata\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants",
@@ -212,7 +217,7 @@
                 "tenants"
               ]
             },
-            "description": "Registers the college, creates its PostgreSQL schema, runs every tenant migration and marks it ACTIVE. Returns 201 only when all of that succeeded."
+            "description": "Registers the college, creates its PostgreSQL schema via Triplex, runs every tenant migration and marks it ACTIVE. Returns 201 only when all of that succeeded.\n\n`time_zone` is optional and defaults to Asia/Kolkata. It affects presentation only — storage is always UTC."
           },
           "event": [
             {
@@ -224,10 +229,17 @@
                   "const d = pm.response.json().data;",
                   "pm.collectionVariables.set('tenant_a_id', d.id);",
                   "pm.environment.set('tenant_a_id', d.id);",
-                  "pm.test('is ACTIVE, not merely registered', () => pm.expect(d.status).to.eql('ACTIVE'));",
+                  "pm.test('is ACTIVE, not merely registered', () => pm.expect(d.lifecycle_status).to.eql('ACTIVE'));",
                   "pm.test('schema name derived from the code', () => { const expected = 'tenant_' + pm.collectionVariables.get('tenant_a_code').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); pm.expect(d.schema_name).to.eql(expected); });",
                   "pm.test('Location header points at the tenant', () => {",
                   "  pm.expect(pm.response.headers.get('location')).to.eql('/api/v1/tenants/' + d.id);",
+                  "});",
+                  "pm.test('stores UTC, returns IST with an explicit offset', () => {",
+                  "  pm.expect(d.time_zone).to.eql('Asia/Kolkata');",
+                  "  pm.expect(d.inserted_at).to.match(/\\+05:30$/);",
+                  "});",
+                  "pm.test('the rendered timestamp parses back to the same instant', () => {",
+                  "  pm.expect(isNaN(Date.parse(d.inserted_at))).to.be.false;",
                   "});"
                 ]
               }
@@ -250,7 +262,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"{{tenant_b_code}}\",\n  \"name\": \"St Xavier College of Arts and Science\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\",\n  \"affiliating_university\": \"University of Madras\"\n}"
+              "raw": "{\n  \"institution_code\": \"{{tenant_b_code}}\",\n  \"institution_name\": \"St Xavier College of Arts and Science\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\",\n  \"affiliating_university\": \"University of Madras\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants",
@@ -275,7 +287,7 @@
                   "const d = pm.response.json().data;",
                   "pm.collectionVariables.set('tenant_b_id', d.id);",
                   "pm.environment.set('tenant_b_id', d.id);",
-                  "pm.test('is ACTIVE', () => pm.expect(d.status).to.eql('ACTIVE'));",
+                  "pm.test('is ACTIVE', () => pm.expect(d.lifecycle_status).to.eql('ACTIVE'));",
                   "pm.test('records the affiliating university', () => {",
                   "  pm.expect(d.affiliating_university).to.eql('University of Madras');",
                   "});"
@@ -313,7 +325,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const codes = pm.response.json().data.map(t => t.code);",
+                  "const codes = pm.response.json().data.map(t => t.institution_code);",
                   "pm.test('includes both provisioned colleges', () => {",
                   "  pm.expect(codes).to.include(pm.collectionVariables.get('tenant_a_code'));",
                   "  pm.expect(codes).to.include(pm.collectionVariables.get('tenant_b_code'));",
@@ -359,7 +371,7 @@
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "pm.test('every row is ACTIVE', () => {",
-                  "  pm.response.json().data.forEach(t => pm.expect(t.status).to.eql('ACTIVE'));",
+                  "  pm.response.json().data.forEach(t => pm.expect(t.lifecycle_status).to.eql('ACTIVE'));",
                   "});"
                 ]
               }
@@ -397,7 +409,7 @@
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "pm.test('is the college we asked for', () => {",
-                  "  pm.expect(pm.response.json().data.code).to.eql(pm.collectionVariables.get('tenant_a_code'));",
+                  "  pm.expect(pm.response.json().data.institution_code).to.eql(pm.collectionVariables.get('tenant_a_code'));",
                   "});"
                 ]
               }
@@ -420,7 +432,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"ABC Institute of Technology (Autonomous)\"\n}"
+              "raw": "{\n  \"institution_name\": \"ABC Institute of Technology (Autonomous)\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}",
@@ -444,7 +456,7 @@
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "pm.test('renamed', () => {",
-                  "  pm.expect(pm.response.json().data.name).to.eql('ABC Institute of Technology (Autonomous)');",
+                  "  pm.expect(pm.response.json().data.institution_name).to.eql('ABC Institute of Technology (Autonomous)');",
                   "});"
                 ]
               }
@@ -467,7 +479,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"ABC Institute of Technology (Autonomous)\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\",\n  \"code\": \"C-HIJACK\",\n  \"schema_name\": \"public\"\n}"
+              "raw": "{\n  \"institution_name\": \"ABC Institute of Technology (Autonomous)\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\",\n  \"institution_code\": \"C-HIJACK\",\n  \"schema_name\": \"public\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants/{{tenant_a_id}}",
@@ -493,7 +505,7 @@
                   "const d = pm.response.json().data;",
                   "pm.test('institution_type unchanged', () => pm.expect(d.institution_type).to.eql('ENGINEERING'));",
                   "pm.test('autonomy_status unchanged', () => pm.expect(d.autonomy_status).to.eql('AUTONOMOUS'));",
-                  "pm.test('code unchanged', () => pm.expect(d.code).to.eql(pm.collectionVariables.get('tenant_a_code')));",
+                  "pm.test('institution_code unchanged', () => pm.expect(d.institution_code).to.eql(pm.collectionVariables.get('tenant_a_code')));",
                   "pm.test('schema_name unchanged', () => { const expected = 'tenant_' + pm.collectionVariables.get('tenant_a_code').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); pm.expect(d.schema_name).to.eql(expected); });"
                 ]
               }
@@ -653,7 +665,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('now SUSPENDED', () => pm.expect(pm.response.json().data.status).to.eql('SUSPENDED'));"
+                  "pm.test('now SUSPENDED', () => pm.expect(pm.response.json().data.lifecycle_status).to.eql('SUSPENDED'));"
                 ]
               }
             }
@@ -690,7 +702,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('back to ACTIVE', () => pm.expect(pm.response.json().data.status).to.eql('ACTIVE'));"
+                  "pm.test('back to ACTIVE', () => pm.expect(pm.response.json().data.lifecycle_status).to.eql('ACTIVE'));"
                 ]
               }
             }
@@ -737,7 +749,7 @@
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
                   "const d = pm.response.json().data;",
-                  "pm.test('resolved the right college', () => pm.expect(d.code).to.eql(pm.collectionVariables.get('tenant_a_code')));",
+                  "pm.test('resolved the right college', () => pm.expect(d.institution_code).to.eql(pm.collectionVariables.get('tenant_a_code')));",
                   "pm.test('assessed out of 150', () => pm.expect(d.profile.criteria_scale).to.eql(150));",
                   "pm.test('OBE enabled', () => pm.expect(d.profile.features.obe_mapping).to.be.true);",
                   "pm.test('BoS revision enabled', () => pm.expect(d.profile.features.bos_curriculum_revision).to.be.true);",
@@ -847,7 +859,10 @@
                   "pm.collectionVariables.set('dept_a_id', d.id);",
                   "pm.environment.set('dept_a_id', d.id);",
                   "pm.test('code upcased', () => pm.expect(d.code).to.eql('CSE'));",
-                  "pm.test('active by default', () => pm.expect(d.is_active).to.be.true);"
+                  "pm.test('active by default', () => pm.expect(d.is_active).to.be.true);",
+                  "pm.test('tenant-scoped timestamps render in the college zone', () => {",
+                  "  pm.expect(d.inserted_at).to.match(/\\+05:30$/);",
+                  "});"
                 ]
               }
             }
@@ -1278,7 +1293,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Hijacked\"\n}"
+              "raw": "{\n  \"institution_name\": \"Hijacked\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/departments/{{dept_b_only_id}}",
@@ -1470,8 +1485,8 @@
                   "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
                   "const e = pm.response.json().errors;",
                   "pm.test('errors are keyed by field', () => {",
-                  "  pm.expect(e.code).to.eql([\"can't be blank\"]);",
-                  "  pm.expect(e.name).to.eql([\"can't be blank\"]);",
+                  "  pm.expect(e.institution_code).to.eql([\"can't be blank\"]);",
+                  "  pm.expect(e.institution_name).to.eql([\"can't be blank\"]);",
                   "  pm.expect(e.institution_type).to.eql([\"can't be blank\"]);",
                   "  pm.expect(e.autonomy_status).to.eql([\"can't be blank\"]);",
                   "});"
@@ -1496,7 +1511,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"C-BADAFF\",\n  \"name\": \"Incomplete Affiliated College\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\"\n}"
+              "raw": "{\n  \"institution_code\": \"C-BADAFF\",\n  \"institution_name\": \"Incomplete Affiliated College\",\n  \"institution_type\": \"ARTS_SCIENCE\",\n  \"autonomy_status\": \"AFFILIATED\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants",
@@ -1542,7 +1557,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"C-COMBI\",\n  \"name\": \"Combined University\",\n  \"institution_type\": \"COMBINED\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+              "raw": "{\n  \"institution_code\": \"C-COMBI\",\n  \"institution_name\": \"Combined University\",\n  \"institution_type\": \"COMBINED\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants",
@@ -1588,7 +1603,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"{{tenant_a_code}}\",\n  \"name\": \"Duplicate College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+              "raw": "{\n  \"institution_code\": \"{{tenant_a_code}}\",\n  \"institution_name\": \"Duplicate College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants",
@@ -1610,7 +1625,7 @@
                 "exec": [
                   "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
                   "pm.test('code already taken', () => {",
-                  "  pm.expect(pm.response.json().errors.code).to.eql(['has already been taken']);",
+                  "  pm.expect(pm.response.json().errors.institution_code).to.eql(['has already been taken']);",
                   "});"
                 ]
               }
@@ -1633,7 +1648,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"!!!!\",\n  \"name\": \"Unnameable College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
+              "raw": "{\n  \"institution_code\": \"!!!!\",\n  \"institution_name\": \"Unnameable College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/tenants",
@@ -1654,7 +1669,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
-                  "pm.test('the code is rejected', () => pm.expect(pm.response.json().errors).to.have.property('code'));"
+                  "pm.test('the code is rejected', () => pm.expect(pm.response.json().errors).to.have.property('institution_code'));"
                 ]
               }
             }
@@ -1883,6 +1898,52 @@
               }
             }
           ]
+        },
+        {
+          "name": "Create Tenant — unrecognised time zone (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"institution_code\": \"C-BADTZ\",\n  \"institution_name\": \"Bad Zone College\",\n  \"institution_type\": \"ENGINEERING\",\n  \"autonomy_status\": \"AUTONOMOUS\",\n  \"time_zone\": \"Mars/Olympus_Mons\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenants"
+              ]
+            },
+            "description": "An unusable zone is rejected on write, so it can never silently degrade every later response."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('names the time_zone field', () => {",
+                  "  pm.expect(pm.response.json().errors).to.have.property('time_zone');",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -1922,7 +1983,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('now ARCHIVED', () => pm.expect(pm.response.json().data.status).to.eql('ARCHIVED'));",
+                  "pm.test('now ARCHIVED', () => pm.expect(pm.response.json().data.lifecycle_status).to.eql('ARCHIVED'));",
                   "pm.test('schema is retained, not dropped', () => {",
                   "  pm.expect(pm.response.json().data.schema_name).to.be.a('string').and.not.empty;",
                   "});"
@@ -1963,7 +2024,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('now ARCHIVED', () => pm.expect(pm.response.json().data.status).to.eql('ARCHIVED'));",
+                  "pm.test('now ARCHIVED', () => pm.expect(pm.response.json().data.lifecycle_status).to.eql('ARCHIVED'));",
                   "pm.test('schema is retained, not dropped', () => {",
                   "  pm.expect(pm.response.json().data.schema_name).to.be.a('string').and.not.empty;",
                   "});"

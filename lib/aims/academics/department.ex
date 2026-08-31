@@ -15,13 +15,10 @@ defmodule Aims.Academics.Department do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @derive {Jason.Encoder,
-           only: [:id, :code, :name, :head_user_id, :is_active, :inserted_at, :updated_at]}
-
   schema "departments" do
     field :code, :string
     field :name, :string
-    field :head_user_id, :integer
+    field :hod_user_id, :integer
     field :is_active, :boolean, default: true
 
     timestamps(type: :utc_datetime_usec)
@@ -31,7 +28,7 @@ defmodule Aims.Academics.Department do
           id: integer() | nil,
           code: String.t() | nil,
           name: String.t() | nil,
-          head_user_id: integer() | nil,
+          hod_user_id: integer() | nil,
           is_active: boolean() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -45,7 +42,7 @@ defmodule Aims.Academics.Department do
   """
   def changeset(department, attrs) do
     department
-    |> cast(attrs, [:code, :name, :head_user_id, :is_active])
+    |> cast(attrs, [:code, :name, :hod_user_id, :is_active])
     |> validate_required([:code, :name])
     |> update_change(:code, &(&1 |> String.trim() |> String.upcase()))
     |> update_change(:name, &String.trim/1)

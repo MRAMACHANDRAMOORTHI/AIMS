@@ -42,8 +42,8 @@ defmodule Mix.Tasks.Aims.Tenants.Status do
     )
 
     Enum.each(tenants, fn tenant ->
-      exists = TenantMigrator.schema_exists?(tenant.schema_name)
-      pending = if exists, do: TenantMigrator.pending_versions(tenant.schema_name), else: [:all]
+      exists = TenantMigrator.schema_exists?(tenant)
+      pending = if exists, do: TenantMigrator.pending_versions(tenant), else: [:all]
 
       migrations =
         cond do
@@ -53,9 +53,9 @@ defmodule Mix.Tasks.Aims.Tenants.Status do
         end
 
       Mix.shell().info(
-        String.pad_trailing(tenant.code, 14) <>
-          String.pad_trailing(tenant.schema_name, 24) <>
-          String.pad_trailing(tenant.status, 18) <>
+        String.pad_trailing(tenant.institution_code, 14) <>
+          String.pad_trailing(Aims.Platform.Tenant.schema_name(tenant), 24) <>
+          String.pad_trailing(tenant.lifecycle_status, 18) <>
           String.pad_trailing(tenant.institution_type, 14) <>
           String.pad_trailing(tenant.autonomy_status, 12) <>
           migrations

@@ -6,8 +6,8 @@ defmodule Aims.Platform.TenantTest do
   defp valid_attrs(overrides \\ %{}) do
     Map.merge(
       %{
-        "code" => "C-41207",
-        "name" => "ABC Institute of Technology",
+        "institution_code" => "C-41207",
+        "institution_name" => "ABC Institute of Technology",
         "institution_type" => "ENGINEERING",
         "autonomy_status" => "AUTONOMOUS"
       },
@@ -23,19 +23,22 @@ defmodule Aims.Platform.TenantTest do
     test "accepts a well-formed autonomous engineering college" do
       changeset = Tenant.create_changeset(%Tenant{}, valid_attrs())
       assert changeset.valid?
-      assert Ecto.Changeset.get_field(changeset, :status) == "PROVISIONING"
+      assert Ecto.Changeset.get_field(changeset, :lifecycle_status) == "PROVISIONING"
     end
 
-    test "derives schema_name from code rather than trusting the caller" do
+    test "derives the tenant slug from the institution code, not from the caller" do
       changeset = Tenant.create_changeset(%Tenant{}, valid_attrs())
-      assert Ecto.Changeset.get_change(changeset, :schema_name) == "tenant_c_41207"
+      assert Ecto.Changeset.get_change(changeset, :tenant_slug) == "c_41207"
     end
 
-    test "ignores a caller-supplied schema_name entirely" do
+    test "ignores a caller-supplied tenant slug or schema name entirely" do
       changeset =
-        Tenant.create_changeset(%Tenant{}, valid_attrs(%{"schema_name" => "public"}))
+        Tenant.create_changeset(
+          %Tenant{},
+          valid_attrs(%{"schema_name" => "public", "tenant_slug" => "public"})
+        )
 
-      assert Ecto.Changeset.get_change(changeset, :schema_name) == "tenant_c_41207"
+      assert Ecto.Changeset.get_change(changeset, :tenant_slug) == "c_41207"
     end
 
     test "requires the core fields" do
@@ -43,8 +46,8 @@ defmodule Aims.Platform.TenantTest do
       refute changeset.valid?
 
       assert %{
-               code: ["can't be blank"],
-               name: ["can't be blank"],
+               institution_code: ["can't be blank"],
+               institution_name: ["can't be blank"],
                institution_type: ["can't be blank"],
                autonomy_status: ["can't be blank"]
              } = errors(changeset)
@@ -92,22 +95,27 @@ defmodule Aims.Platform.TenantTest do
       assert Tenant.create_changeset(%Tenant{}, valid_attrs()).valid?
     end
 
-    test "rejects a code from which no schema name can be derived" do
-      changeset = Tenant.create_changeset(%Tenant{}, valid_attrs(%{"code" => "!!!!"}))
+    test "rejects an institution code from which no slug can be derived" do
+      changeset = Tenant.create_changeset(%Tenant{}, valid_attrs(%{"institution_code" => "!!!!"}))
       refute changeset.valid?
-      assert %{code: [_ | _]} = errors(changeset)
+      assert %{institution_code: [_ | _]} = errors(changeset)
     end
 
     test "trims surrounding whitespace" do
       changeset =
-        Tenant.create_changeset(%Tenant{}, valid_attrs(%{"name" => "  ABC Institute  "}))
+        Tenant.create_changeset(
+          %Tenant{},
+          valid_attrs(%{"institution_name" => "  ABC Institute  "})
+        )
 
-      assert Ecto.Changeset.get_change(changeset, :name) == "ABC Institute"
+      assert Ecto.Changeset.get_change(changeset, :institution_name) == "ABC Institute"
     end
 
-    test "forces status to PROVISIONING even when ACTIVE is supplied" do
-      changeset = Tenant.create_changeset(%Tenant{}, valid_attrs(%{"status" => "ACTIVE"}))
-      assert Ecto.Changeset.get_field(changeset, :status) == "PROVISIONING"
+    test "forces lifecycle_status to PROVISIONING even when ACTIVE is supplied" do
+      changeset =
+        Tenant.create_changeset(%Tenant{}, valid_attrs(%{"lifecycle_status" => "ACTIVE"}))
+
+      assert Ecto.Changeset.get_field(changeset, :lifecycle_status) == "PROVISIONING"
     end
   end
 
@@ -116,20 +124,25 @@ defmodule Aims.Platform.TenantTest do
       %{
         tenant: %Tenant{
           id: 1,
-          code: "C-41207",
-          name: "ABC Institute",
-          schema_name: "tenant_c_41207",
+          institution_code: "C-41207",
+          institution_name: "ABC Institute",
+          tenant_slug: "c_41207",
           institution_type: "ENGINEERING",
           autonomy_status: "AUTONOMOUS",
-          status: "ACTIVE"
+          lifecycle_status: "ACTIVE",
+          time_zone: "Asia/Kolkata"
         }
       }
     end
 
     test "allows renaming", %{tenant: tenant} do
-      changeset = Tenant.update_changeset(tenant, %{"name" => "ABC Institute of Technology"})
+      changeset =
+        Tenant.update_changeset(tenant, %{"institution_name" => "ABC Institute of Technology"})
+
       assert changeset.valid?
-      assert Ecto.Changeset.get_change(changeset, :name) == "ABC Institute of Technology"
+
+      assert Ecto.Changeset.get_change(changeset, :institution_name) ==
+               "ABC Institute of Technology"
     end
 
     test "refuses to change institution_type (invariant I-40)", %{tenant: tenant} do
@@ -142,12 +155,15 @@ defmodule Aims.Platform.TenantTest do
       refute Ecto.Changeset.get_change(changeset, :autonomy_status)
     end
 
-    test "refuses to change code or schema_name", %{tenant: tenant} do
+    test "refuses to change institution_code or tenant_slug", %{tenant: tenant} do
       changeset =
-        Tenant.update_changeset(tenant, %{"code" => "C-999", "schema_name" => "public"})
+        Tenant.update_changeset(tenant, %{
+          "institution_code" => "C-999",
+          "schema_name" => "public"
+        })
 
-      refute Ecto.Changeset.get_change(changeset, :code)
-      refute Ecto.Changeset.get_change(changeset, :schema_name)
+      refute Ecto.Changeset.get_change(changeset, :institution_code)
+      refute Ecto.Changeset.get_change(changeset, :tenant_slug)
     end
 
     test "still enforces the affiliation rule", %{tenant: tenant} do

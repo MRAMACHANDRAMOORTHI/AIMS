@@ -10,19 +10,20 @@ defmodule AimsWeb.DepartmentControllerTest do
   import Aims.PlatformFixtures
 
   setup %{conn: conn} do
-    tenant_a = tenant_fixture(%{"code" => "C-WEBAAA", "name" => "Alpha Institute"})
+    tenant_a =
+      tenant_fixture(%{"institution_code" => "C-WEBAAA", "institution_name" => "Alpha Institute"})
 
     tenant_b =
       tenant_fixture(%{
-        "code" => "C-WEBBBB",
-        "name" => "Beta College",
+        "institution_code" => "C-WEBBBB",
+        "institution_name" => "Beta College",
         "institution_type" => "ARTS_SCIENCE"
       })
 
     {:ok, conn: put_req_header(conn, "accept", "application/json"), a: tenant_a, b: tenant_b}
   end
 
-  defp as(conn, tenant), do: put_req_header(conn, "x-tenant", tenant.code)
+  defp as(conn, tenant), do: put_req_header(conn, "x-tenant", tenant.institution_code)
 
   describe "POST /api/v1/departments" do
     test "creates a department in the calling tenant's schema", %{conn: conn, a: a} do

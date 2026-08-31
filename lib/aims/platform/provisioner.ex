@@ -5,37 +5,35 @@ defmodule Aims.Platform.Provisioner do
 
   ## Why this is not one transaction
 
-  The registry row lives in `public`; the schema creation and tenant migrations
-  are DDL driven by `Ecto.Migrator`, which manages its own transactions and its
-  own advisory lock. Wrapping the whole workflow in a single outer transaction
-  would either deadlock against the migrator's lock or silently defeat it.
+  The registry row lives in `public`; the schema and its migrations are DDL
+  driven by Triplex, which runs `Ecto.Migrator` with its own transaction and
+  advisory lock. Wrapping the whole workflow in one outer transaction would
+  either deadlock against that lock or silently defeat it.
 
-  So the workflow is a **saga with an explicit terminal state** rather than one
-  atomic unit, which satisfies the requirement that a half-failed tenant is
-  never left looking successful:
+  So the workflow is a **saga with an explicit terminal state**, which satisfies
+  the requirement that a half-failed college is never left looking successful:
 
       insert row (PROVISIONING)   <- committed, so an orphan schema is impossible
-      create schema
-      run tenant migrations
+      Triplex.create              <- schema + migrations, atomic within itself
       seed initial records
       mark ACTIVE                 <- the only status the application will serve
 
   A failure at any step after the insert drops the schema and moves the row to
   `PROVISION_FAILED`. That status is visible, queryable and retryable. It is
-  never ACTIVE, and `Aims.Platform.Tenants.fetch_active/1` — the only lookup the
-  request path uses — refuses everything but ACTIVE. A partially provisioned
-  tenant therefore cannot serve a request, and cannot be mistaken for a healthy
-  one during an audit.
+  never ACTIVE, and `fetch_active_tenant_by_code/1` — the only lookup the
+  request path uses — refuses everything else. A partially provisioned college
+  therefore cannot serve a request, and cannot be mistaken for a healthy one
+  during an audit.
 
   Ordering matters: the row is committed *before* the schema is created. The
-  reverse would allow a schema with no registry row — an orphan nothing knows
-  to clean up. This way the worst case is a registry row with no schema, which
+  reverse would allow a schema with no registry row — an orphan nothing knows to
+  clean up. This way the worst case is a registry row with no schema, which
   `PROVISION_FAILED` names explicitly and `retry/1` repairs.
   """
 
   require Logger
 
-  alias Aims.Platform.{SchemaName, Tenant, TenantMigrator, TenantProfile}
+  alias Aims.Platform.{Tenant, TenantMigrator, TenantProfile}
   alias Aims.Repo
 
   @type failure_reason ::
@@ -44,10 +42,9 @@ defmodule Aims.Platform.Provisioner do
           | {:provisioning_failed, Tenant.t(), term()}
 
   @doc """
-  Registers and provisions a tenant.
+  Registers and provisions a college.
 
-  Returns `{:ok, tenant}` only when the tenant is fully ACTIVE with a migrated
-  schema.
+  Returns `{:ok, tenant}` only when it is fully ACTIVE with a migrated schema.
   """
   @spec provision(map()) :: {:ok, Tenant.t()} | {:error, failure_reason()}
   def provision(attrs) do
@@ -60,14 +57,14 @@ defmodule Aims.Platform.Provisioner do
   end
 
   @doc """
-  Re-runs provisioning for a tenant that failed or is stuck in PROVISIONING.
+  Re-runs provisioning for a college that failed or is stuck in PROVISIONING.
 
-  The recovery mechanism the architecture requires. Refuses tenants that are
-  already ACTIVE so it cannot be used to rebuild a live college's schema; use
-  `Aims.Platform.TenantMigrator.migrate/1` to bring a healthy tenant forward.
+  Refuses colleges that are already ACTIVE so it cannot rebuild a live schema;
+  use `Aims.Platform.TenantMigrator.migrate/1` to bring a healthy college
+  forward.
   """
   @spec retry(Tenant.t()) :: {:ok, Tenant.t()} | {:error, failure_reason()}
-  def retry(%Tenant{status: status} = tenant)
+  def retry(%Tenant{lifecycle_status: status} = tenant)
       when status in ["PROVISION_FAILED", "PROVISIONING"] do
     build_tenant_schema(tenant)
   end
@@ -77,15 +74,15 @@ defmodule Aims.Platform.Provisioner do
   end
 
   @doc """
-  Removes a failed tenant entirely: schema dropped, registry row deleted.
+  Removes a failed college entirely: schema dropped, registry row deleted.
 
-  Deliberately restricted to `PROVISION_FAILED`. A tenant that has ever been
+  Deliberately restricted to `PROVISION_FAILED`. A college that has ever been
   ACTIVE holds accreditation records and is archived, never dropped
-  (architecture §16, invariant I-19).
+  (invariant I-19).
   """
   @spec discard_failed(Tenant.t()) :: {:ok, Tenant.t()} | {:error, :not_discardable}
-  def discard_failed(%Tenant{status: "PROVISION_FAILED"} = tenant) do
-    TenantMigrator.drop_schema(tenant.schema_name)
+  def discard_failed(%Tenant{lifecycle_status: "PROVISION_FAILED"} = tenant) do
+    TenantMigrator.drop(tenant)
     Repo.delete(tenant)
   end
 
@@ -99,29 +96,30 @@ defmodule Aims.Platform.Provisioner do
   end
 
   # An existing schema with no matching registry row means a previous run left
-  # debris, or a name collided. Either way, refuse rather than migrate into a
+  # debris, or a slug collided. Either way, refuse rather than migrate into a
   # schema whose contents are unknown.
   defp ensure_no_schema_collision(%Tenant{} = tenant) do
-    if TenantMigrator.schema_exists?(tenant.schema_name) do
+    if TenantMigrator.schema_exists?(tenant) do
+      schema = Tenant.schema_name(tenant)
+
       Logger.warning(
-        "schema #{tenant.schema_name} already exists while provisioning tenant #{tenant.code}"
+        "schema #{schema} already exists while provisioning #{tenant.institution_code}"
       )
 
       mark_failed(tenant)
-      {:error, {:schema_collision, tenant.schema_name}}
+      {:error, {:schema_collision, schema}}
     else
       :ok
     end
   end
 
   defp build_tenant_schema(%Tenant{} = tenant) do
-    schema = SchemaName.safe!(tenant.schema_name)
-
-    with :ok <- run_migrations(tenant),
+    with {:ok, _} <- TenantMigrator.create(tenant),
          :ok <- seed_initial_records(tenant) do
-      case Repo.update(Tenant.status_changeset(tenant, "ACTIVE")) do
+      case Repo.update(Tenant.lifecycle_changeset(tenant, "ACTIVE")) do
         {:ok, active} ->
-          Logger.info("provisioned tenant #{active.code} into schema #{schema}")
+          Logger.info("provisioned #{active.institution_code} into #{Tenant.schema_name(active)}")
+
           {:ok, active}
 
         {:error, changeset} ->
@@ -132,31 +130,24 @@ defmodule Aims.Platform.Provisioner do
     end
   end
 
-  defp run_migrations(%Tenant{} = tenant) do
-    case TenantMigrator.migrate(tenant) do
-      {:ok, _versions} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # Extension point. Milestone 1 seeds nothing: delivery patterns live in
-  # `public.academic_patterns` (contradiction C-11), so a fresh tenant schema is
-  # legitimately empty. Kept as an explicit step so later seed data has an
-  # obvious, transactional home rather than being scattered into provisioning.
+  # Extension point. Milestone 1 seeds nothing: term patterns live in
+  # `public.academic_term_patterns` (contradiction C-11), so a fresh tenant
+  # schema is legitimately empty. Kept as an explicit step so later seed data
+  # has an obvious home rather than being scattered into provisioning.
   defp seed_initial_records(%Tenant{}), do: :ok
 
   defp abort(%Tenant{} = tenant, reason) do
-    Logger.error("provisioning failed for tenant #{tenant.code}: #{inspect(reason)}")
-    TenantMigrator.drop_schema(tenant.schema_name)
+    Logger.error("provisioning failed for #{tenant.institution_code}: #{inspect(reason)}")
+    TenantMigrator.drop(tenant)
     {:ok, failed} = mark_failed(tenant)
     {:error, {:provisioning_failed, failed, reason}}
   end
 
   defp mark_failed(%Tenant{} = tenant) do
-    Repo.update(Tenant.status_changeset(tenant, "PROVISION_FAILED"))
+    Repo.update(Tenant.lifecycle_changeset(tenant, "PROVISION_FAILED"))
   end
 
-  @doc "Convenience: the runtime profile for a provisioned tenant."
+  @doc "Convenience: the runtime profile for a provisioned college."
   @spec profile(Tenant.t()) :: TenantProfile.t()
   def profile(%Tenant{} = tenant), do: TenantProfile.for_tenant(tenant)
 end

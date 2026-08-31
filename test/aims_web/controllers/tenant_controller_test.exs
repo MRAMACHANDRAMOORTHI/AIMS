@@ -12,21 +12,22 @@ defmodule AimsWeb.TenantControllerTest do
 
   describe "POST /api/v1/tenants" do
     test "provisions an engineering autonomous college", %{conn: conn} do
-      conn = post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"code" => "C-API001"}))
+      conn =
+        post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"institution_code" => "C-API001"}))
 
       assert %{
                "data" => %{
                  "id" => id,
-                 "code" => "C-API001",
+                 "institution_code" => "C-API001",
                  "schema_name" => "tenant_c_api001",
                  "institution_type" => "ENGINEERING",
                  "autonomy_status" => "AUTONOMOUS",
-                 "status" => "ACTIVE"
+                 "lifecycle_status" => "ACTIVE"
                }
              } = json_response(conn, 201)
 
       assert is_integer(id)
-      assert TenantMigrator.schema_exists?("tenant_c_api001")
+      assert TenantMigrator.schema_exists?("c_api001")
     end
 
     test "sets a Location header pointing at the new tenant", %{conn: conn} do
@@ -38,7 +39,7 @@ defmodule AimsWeb.TenantControllerTest do
 
     test "accepts a nested tenant payload as well as a flat one", %{conn: conn} do
       conn = post(conn, ~p"/api/v1/tenants", %{"tenant" => engineering_attrs()})
-      assert %{"data" => %{"status" => "ACTIVE"}} = json_response(conn, 201)
+      assert %{"data" => %{"lifecycle_status" => "ACTIVE"}} = json_response(conn, 201)
     end
 
     test "provisions an affiliated arts & science college", %{conn: conn} do
@@ -57,8 +58,8 @@ defmodule AimsWeb.TenantControllerTest do
       conn = post(conn, ~p"/api/v1/tenants", %{})
 
       assert %{"errors" => errors} = json_response(conn, 422)
-      assert errors["code"] == ["can't be blank"]
-      assert errors["name"] == ["can't be blank"]
+      assert errors["institution_code"] == ["can't be blank"]
+      assert errors["institution_name"] == ["can't be blank"]
       assert errors["institution_type"] == ["can't be blank"]
       assert errors["autonomy_status"] == ["can't be blank"]
     end
@@ -78,11 +79,13 @@ defmodule AimsWeb.TenantControllerTest do
     end
 
     test "rejects a duplicate code", %{conn: conn} do
-      attrs = engineering_attrs(%{"code" => "C-DUPE01"})
+      attrs = engineering_attrs(%{"institution_code" => "C-DUPE01"})
       assert json_response(post(conn, ~p"/api/v1/tenants", attrs), 201)
 
       conn = post(build_conn(), ~p"/api/v1/tenants", attrs)
-      assert %{"errors" => %{"code" => ["has already been taken"]}} = json_response(conn, 422)
+
+      assert %{"errors" => %{"institution_code" => ["has already been taken"]}} =
+               json_response(conn, 422)
     end
 
     test "ignores a caller-supplied schema_name", %{conn: conn} do
@@ -90,7 +93,7 @@ defmodule AimsWeb.TenantControllerTest do
         post(
           conn,
           ~p"/api/v1/tenants",
-          engineering_attrs(%{"code" => "C-SAFE01", "schema_name" => "public"})
+          engineering_attrs(%{"institution_code" => "C-SAFE01", "schema_name" => "public"})
         )
 
       assert %{"data" => %{"schema_name" => "tenant_c_safe01"}} = json_response(conn, 201)
@@ -98,13 +101,15 @@ defmodule AimsWeb.TenantControllerTest do
 
     test "ignores a caller-supplied status", %{conn: conn} do
       # A client must not be able to declare itself ACTIVE without provisioning.
-      conn = post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"status" => "ARCHIVED"}))
-      assert %{"data" => %{"status" => "ACTIVE"}} = json_response(conn, 201)
+      conn =
+        post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"lifecycle_status" => "ARCHIVED"}))
+
+      assert %{"data" => %{"lifecycle_status" => "ACTIVE"}} = json_response(conn, 201)
     end
 
     test "rejects a code that cannot yield a schema name", %{conn: conn} do
-      conn = post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"code" => "!!!!"}))
-      assert %{"errors" => %{"code" => [_ | _]}} = json_response(conn, 422)
+      conn = post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"institution_code" => "!!!!"}))
+      assert %{"errors" => %{"institution_code" => [_ | _]}} = json_response(conn, 422)
     end
   end
 
@@ -114,9 +119,9 @@ defmodule AimsWeb.TenantControllerTest do
       b = tenant_fixture()
 
       assert %{"data" => data} = json_response(get(conn, ~p"/api/v1/tenants"), 200)
-      codes = Enum.map(data, & &1["code"])
-      assert a.code in codes
-      assert b.code in codes
+      codes = Enum.map(data, & &1["institution_code"])
+      assert a.institution_code in codes
+      assert b.institution_code in codes
     end
 
     test "filters by status", %{conn: conn} do
@@ -127,9 +132,9 @@ defmodule AimsWeb.TenantControllerTest do
       assert %{"data" => data} =
                json_response(get(conn, ~p"/api/v1/tenants?status=SUSPENDED"), 200)
 
-      codes = Enum.map(data, & &1["code"])
-      assert suspended.code in codes
-      refute active.code in codes
+      codes = Enum.map(data, & &1["institution_code"])
+      assert suspended.institution_code in codes
+      refute active.institution_code in codes
     end
   end
 
@@ -137,8 +142,8 @@ defmodule AimsWeb.TenantControllerTest do
     test "shows a tenant", %{conn: conn} do
       tenant = tenant_fixture()
       conn = get(conn, ~p"/api/v1/tenants/#{tenant.id}")
-      assert %{"data" => %{"code" => code}} = json_response(conn, 200)
-      assert code == tenant.code
+      assert %{"data" => %{"institution_code" => code}} = json_response(conn, 200)
+      assert code == tenant.institution_code
     end
 
     test "404s for an unknown id", %{conn: conn} do
@@ -150,8 +155,11 @@ defmodule AimsWeb.TenantControllerTest do
   describe "PATCH /api/v1/tenants/:id" do
     test "renames a tenant", %{conn: conn} do
       tenant = tenant_fixture()
-      conn = patch(conn, ~p"/api/v1/tenants/#{tenant.id}", %{"name" => "Renamed College"})
-      assert %{"data" => %{"name" => "Renamed College"}} = json_response(conn, 200)
+
+      conn =
+        patch(conn, ~p"/api/v1/tenants/#{tenant.id}", %{"institution_name" => "Renamed College"})
+
+      assert %{"data" => %{"institution_name" => "Renamed College"}} = json_response(conn, 200)
     end
 
     test "silently refuses to change institution_type or autonomy_status", %{conn: conn} do
@@ -159,7 +167,7 @@ defmodule AimsWeb.TenantControllerTest do
 
       conn =
         patch(conn, ~p"/api/v1/tenants/#{tenant.id}", %{
-          "name" => "Still Fine",
+          "institution_name" => "Still Fine",
           "institution_type" => "ARTS_SCIENCE",
           "autonomy_status" => "AFFILIATED"
         })
@@ -177,13 +185,15 @@ defmodule AimsWeb.TenantControllerTest do
 
       conn =
         patch(conn, ~p"/api/v1/tenants/#{tenant.id}", %{
-          "code" => "C-HIJACK",
+          "institution_code" => "C-HIJACK",
           "schema_name" => "public"
         })
 
-      assert %{"data" => %{"code" => code, "schema_name" => schema}} = json_response(conn, 200)
-      assert code == tenant.code
-      assert schema == tenant.schema_name
+      assert %{"data" => %{"institution_code" => code, "schema_name" => schema}} =
+               json_response(conn, 200)
+
+      assert code == tenant.institution_code
+      assert schema == Aims.Platform.Tenant.schema_name(tenant)
     end
   end
 
@@ -192,16 +202,16 @@ defmodule AimsWeb.TenantControllerTest do
       tenant = tenant_fixture()
 
       conn = post(conn, ~p"/api/v1/tenants/#{tenant.id}/suspend")
-      assert %{"data" => %{"status" => "SUSPENDED"}} = json_response(conn, 200)
+      assert %{"data" => %{"lifecycle_status" => "SUSPENDED"}} = json_response(conn, 200)
 
       conn = post(build_conn(), ~p"/api/v1/tenants/#{tenant.id}/activate")
-      assert %{"data" => %{"status" => "ACTIVE"}} = json_response(conn, 200)
+      assert %{"data" => %{"lifecycle_status" => "ACTIVE"}} = json_response(conn, 200)
     end
 
     test "archive", %{conn: conn} do
       tenant = tenant_fixture()
       conn = post(conn, ~p"/api/v1/tenants/#{tenant.id}/archive")
-      assert %{"data" => %{"status" => "ARCHIVED"}} = json_response(conn, 200)
+      assert %{"data" => %{"lifecycle_status" => "ARCHIVED"}} = json_response(conn, 200)
     end
 
     test "retry refuses a healthy tenant", %{conn: conn} do
@@ -249,8 +259,50 @@ defmodule AimsWeb.TenantControllerTest do
       assert %{"data" => %{"migrated" => migrated, "failed" => [], "failed_count" => 0}} =
                json_response(conn, 200)
 
-      assert a.code in migrated
-      assert b.code in migrated
+      assert a.institution_code in migrated
+      assert b.institution_code in migrated
+    end
+  end
+
+  describe "time is stored UTC and returned in the college's zone" do
+    test "timestamps carry an explicit +05:30 offset, not a bare local time", %{conn: conn} do
+      tenant = tenant_fixture()
+      conn = get(conn, ~p"/api/v1/tenants/#{tenant.id}")
+
+      assert %{"data" => %{"inserted_at" => inserted, "time_zone" => "Asia/Kolkata"}} =
+               json_response(conn, 200)
+
+      assert String.ends_with?(inserted, "+05:30")
+      refute String.ends_with?(inserted, "Z")
+    end
+
+    test "the rendered value is the same instant that was stored", %{conn: conn} do
+      tenant = tenant_fixture()
+      conn = get(conn, ~p"/api/v1/tenants/#{tenant.id}")
+      %{"data" => %{"inserted_at" => inserted}} = json_response(conn, 200)
+
+      {:ok, parsed, _offset} = DateTime.from_iso8601(inserted)
+      assert DateTime.compare(parsed, tenant.inserted_at) == :eq
+    end
+
+    test "a college can be given a different zone and its responses follow", %{conn: conn} do
+      tenant = tenant_fixture()
+
+      conn =
+        patch(conn, ~p"/api/v1/tenants/#{tenant.id}", %{
+          "institution_name" => "Relocated College",
+          "time_zone" => "Etc/UTC"
+        })
+
+      assert %{"data" => %{"time_zone" => "Etc/UTC", "inserted_at" => inserted}} =
+               json_response(conn, 200)
+
+      assert String.ends_with?(inserted, "Z")
+    end
+
+    test "an unrecognised zone is rejected on write", %{conn: conn} do
+      conn = post(conn, ~p"/api/v1/tenants", engineering_attrs(%{"time_zone" => "Mars/Base"}))
+      assert %{"errors" => %{"time_zone" => [_ | _]}} = json_response(conn, 422)
     end
   end
 
@@ -264,8 +316,22 @@ defmodule AimsWeb.TenantControllerTest do
       assert latest == TenantMigrator.latest_version()
     end
 
-    test "academic patterns are platform-wide reference data", %{conn: conn} do
-      assert %{"data" => patterns} = json_response(get(conn, ~p"/api/v1/academic-patterns"), 200)
+    test "health reports both UTC and local server time, each with its offset", %{conn: conn} do
+      assert %{
+               "data" => %{
+                 "server_time_utc" => utc,
+                 "server_time_local" => local,
+                 "default_time_zone" => "Asia/Kolkata"
+               }
+             } = json_response(get(conn, ~p"/api/v1/health"), 200)
+
+      assert String.ends_with?(utc, "Z")
+      assert String.ends_with?(local, "+05:30")
+    end
+
+    test "academic term patterns are platform-wide reference data", %{conn: conn} do
+      assert %{"data" => patterns} =
+               json_response(get(conn, ~p"/api/v1/academic-term-patterns"), 200)
 
       by_code = Map.new(patterns, &{&1["code"], &1["terms_per_year"]})
       assert by_code == %{"SEMESTER" => 2, "TRIMESTER" => 3, "ANNUAL" => 1}

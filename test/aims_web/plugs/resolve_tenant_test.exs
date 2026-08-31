@@ -21,34 +21,36 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
 
       conn =
         conn
-        |> put_req_header("x-tenant", tenant.code)
+        |> put_req_header("x-tenant", tenant.institution_code)
         |> get(~p"/api/v1/tenant")
 
-      assert %{"data" => %{"code" => code, "schema_name" => schema}} = json_response(conn, 200)
-      assert code == tenant.code
-      assert schema == tenant.schema_name
+      assert %{"data" => %{"institution_code" => code, "schema_name" => schema}} =
+               json_response(conn, 200)
+
+      assert code == tenant.institution_code
+      assert schema == Aims.Platform.Tenant.schema_name(tenant)
     end
 
     test "resolves from a subdomain", %{conn: conn} do
-      _tenant = tenant_fixture(%{"code" => "alpha"})
+      _tenant = tenant_fixture(%{"institution_code" => "alpha"})
 
       conn = %{conn | host: "alpha.aims.example.com"} |> get(~p"/api/v1/tenant")
 
-      assert %{"data" => %{"code" => "alpha"}} = json_response(conn, 200)
+      assert %{"data" => %{"institution_code" => "alpha"}} = json_response(conn, 200)
     end
 
     test "a subdomain wins over a header, because it is the less forgeable of the two",
          %{conn: conn} do
-      subdomain_tenant = tenant_fixture(%{"code" => "beta"})
+      subdomain_tenant = tenant_fixture(%{"institution_code" => "beta"})
       header_tenant = tenant_fixture()
 
       conn =
         %{conn | host: "beta.aims.example.com"}
-        |> put_req_header("x-tenant", header_tenant.code)
+        |> put_req_header("x-tenant", header_tenant.institution_code)
         |> get(~p"/api/v1/tenant")
 
-      assert %{"data" => %{"code" => code}} = json_response(conn, 200)
-      assert code == subdomain_tenant.code
+      assert %{"data" => %{"institution_code" => code}} = json_response(conn, 200)
+      assert code == subdomain_tenant.institution_code
     end
 
     test "ignores reserved subdomains and falls through to the header", %{conn: conn} do
@@ -56,23 +58,27 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
 
       conn =
         %{conn | host: "api.aims.example.com"}
-        |> put_req_header("x-tenant", tenant.code)
+        |> put_req_header("x-tenant", tenant.institution_code)
         |> get(~p"/api/v1/tenant")
 
-      assert %{"data" => %{"code" => code}} = json_response(conn, 200)
-      assert code == tenant.code
+      assert %{"data" => %{"institution_code" => code}} = json_response(conn, 200)
+      assert code == tenant.institution_code
     end
 
     test "echoes the resolved tenant in a response header", %{conn: conn} do
       tenant = tenant_fixture()
-      conn = conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
-      assert get_resp_header(conn, "x-resolved-tenant") == [tenant.code]
+
+      conn =
+        conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
+
+      assert get_resp_header(conn, "x-resolved-tenant") == [tenant.institution_code]
     end
 
     test "exposes the profile the two flags resolve to", %{conn: conn} do
       tenant = tenant_fixture()
 
-      conn = conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
+      conn =
+        conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
 
       assert %{
                "data" => %{
@@ -93,7 +99,8 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
     test "an affiliated arts & science college resolves to the 100-mark profile", %{conn: conn} do
       tenant = tenant_fixture(%{"institution_type" => "ARTS_SCIENCE"})
 
-      conn = conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
+      conn =
+        conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
 
       assert %{
                "data" => %{
@@ -131,7 +138,8 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
       tenant = tenant_fixture()
       {:ok, _} = Platform.suspend_tenant(tenant)
 
-      conn = conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
+      conn =
+        conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
 
       assert %{"errors" => %{"code" => "tenant_inactive", "detail" => detail}} =
                json_response(conn, 403)
@@ -143,7 +151,9 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
       tenant = tenant_fixture()
       {:ok, _} = Platform.archive_tenant(tenant)
 
-      conn = conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
+      conn =
+        conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
+
       assert %{"errors" => %{"code" => "tenant_inactive"}} = json_response(conn, 403)
     end
 
@@ -176,7 +186,7 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
       tenant = tenant_fixture()
       Context.clear()
 
-      conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
+      conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
 
       # The plug registers a before_send that clears it, so a reused process
       # cannot inherit the previous request's tenant.
@@ -194,7 +204,8 @@ defmodule AimsWeb.Plugs.ResolveTenantTest do
     test "403 once the authenticated strategy is authoritative", %{conn: conn} do
       tenant = tenant_fixture()
 
-      conn = conn |> put_req_header("x-tenant", tenant.code) |> get(~p"/api/v1/tenant")
+      conn =
+        conn |> put_req_header("x-tenant", tenant.institution_code) |> get(~p"/api/v1/tenant")
 
       assert %{"errors" => %{"code" => "tenant_resolution_forbidden"}} = json_response(conn, 403)
     end
